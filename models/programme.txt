@@ -1,0 +1,3 @@
+- ajouter l'embedding du bruit dans le modèle 
+- ajouter un correcteur en sampling (Lagevin déterministe sur la fin, Heun)
+- si marche pas changer architecture kerras, loss 
