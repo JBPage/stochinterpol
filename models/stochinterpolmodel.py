@@ -265,21 +265,47 @@ class StochasticInterpolentModel(pl.LightningModule):
     def on_validation_epoch_end(self):
         if len(self.validation_step_outputs) == 0:
             return
-        
-        # Calculer la moyenne
+
+        # Compute mean validation loss
         val_losses = [x.item() for x in self.validation_step_outputs]
         epoch_mean_loss = sum(val_losses) / len(val_losses)
-        
+
         # Log to WandB
-        self.log("val_loss_epoch", epoch_mean_loss, prog_bar=True, sync_dist=True)
-        
-        #Only first rank gpu writes in the text file
+        self.log(
+            "val_loss_epoch",
+            epoch_mean_loss,
+            prog_bar=True,
+            sync_dist=True
+        )
+
+        # Only global rank 0 writes to disk
         if self.trainer.is_global_zero:
-            txt_path = "./val_loss_epoch.txt"
+            import os
+
+            # Folder
+            out_dir = "val_losses"
+            os.makedirs(out_dir, exist_ok=True)
+
+            # Job ID (SLURM first, fallback otherwise)
+            job_id = (
+                os.environ.get("SLURM_JOB_ID")
+                or os.environ.get("JOB_ID")
+                or "unknown"
+            )
+
+            # File path
+            txt_path = os.path.join(
+                out_dir,
+                f"val_loss_epoch_{job_id}.txt"
+            )
+
+            # Append epoch + loss
             with open(txt_path, "a") as f:
-                f.write(f"{self.current_epoch}\t{epoch_mean_loss:.6f}\n") 
-        # Nettoyer les outputs pour la prochaine epoch
+                f.write(f"{self.current_epoch}\t{epoch_mean_loss:.6f}\n")
+
+        # Clear stored outputs
         self.validation_step_outputs.clear()
+
 
     def state_dict(self, *args, **kwargs):
         state = super().state_dict(*args, **kwargs)
