@@ -179,12 +179,14 @@ class StochasticInterpolentModel(pl.LightningModule):
         condition_data_costhab = batch["condition_data_costhab"].to(self.device)
         prediction_data= batch["prediction_data"].to(self.device)
 
+        const = 1e-4
+        
         if s_func is None:
-            s_func = lambda t: 0.1 * torch.sin(np.pi * t)
+            s_func = lambda t: const * torch.sin(np.pi * t)
 
         # derivative of s(t)
         def s_prime(t):
-            return 0.0001 * np.pi * torch.cos(np.pi * t)
+            return const * np.pi * torch.cos(np.pi * t)
 
 
         if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
@@ -195,10 +197,14 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
+
+            # Encode popuolation, k and costhab conditioning data
             x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample()
             x_cond_k = condition_data_k #self._external_models["vae_land"].encode(condition_data_k.to(self._external_models["vae_land"].device)).latent_dist.sample() 
             x_cond_costhab = condition_data_costhab #self._external_models["vae_land"].encode(condition_data_costhab.to(self._external_models["vae_land"].device)).latent_dist.sample()
+            # Encode prediction data
             x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() 
+            # Scale latents back to original range
             x_cond_pop = x_cond_pop * self._external_models["vae_pop"].config.scaling_factor
             x_cond_k = x_cond_k * self._external_models["vae_land"].config.scaling_factor
             x_cond_costhab = x_cond_costhab * self._external_models["vae_land"].config.scaling_factor
@@ -206,8 +212,8 @@ class StochasticInterpolentModel(pl.LightningModule):
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
             # x_cond = torch.cat((x_cond_pop, x_cond_k, x_cond_costhab), dim=1).to(self.device)
             # x_cond_film = F.adaptive_avg_pool2d(x_cond_pop, (32,32)).flatten(1)  # condition vector would be 4*16*16
-        # sample t ~ Uniform(0,1)
 
+        # sample t ~ Uniform(0,1)
         batch_t = torch.rand(x.shape[0], device=x.device)
 
         # sample Gaussian noise
