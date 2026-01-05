@@ -270,14 +270,6 @@ class StochasticInterpolentModel(pl.LightningModule):
         val_losses = [x.item() for x in self.validation_step_outputs]
         epoch_mean_loss = sum(val_losses) / len(val_losses)
 
-        # Log to WandB
-        self.log(
-            "val_loss_epoch",
-            epoch_mean_loss,
-            prog_bar=True,
-            sync_dist=True
-        )
-
         # Only global rank 0 writes to disk
         if self.trainer.is_global_zero:
             import os
@@ -288,7 +280,8 @@ class StochasticInterpolentModel(pl.LightningModule):
 
             # Job ID (SLURM first, fallback otherwise)
             job_id = (
-                os.environ.get("SLURM_JOB_ID")
+                os.environ.get("RUN_ID")
+                or os.environ.get("SLURM_JOB_ID")
                 or os.environ.get("JOB_ID")
                 or "unknown"
             )
@@ -298,7 +291,7 @@ class StochasticInterpolentModel(pl.LightningModule):
                 out_dir,
                 f"val_loss_epoch_{job_id}.txt"
             )
-
+            print(f"Writing validation losses to {txt_path}")
             # Append epoch + loss
             with open(txt_path, "a") as f:
                 f.write(f"{self.current_epoch}\t{epoch_mean_loss:.6f}\n")
