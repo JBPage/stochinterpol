@@ -230,7 +230,7 @@ class Unet_stochinterpolant_1(nn.Module):
         self.channels = channels
         init_dim = default(init_dim, dim // 3 * 2)
 
-        self.init_conv = nn.Conv2d((self.self_condition+1)*channels, init_dim, 7, padding=3)
+        self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
         
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
