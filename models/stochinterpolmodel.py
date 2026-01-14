@@ -20,8 +20,6 @@ class StochasticInterpolentModel(pl.LightningModule):
                  lr=[1e-3, 1e-4], 
                  train_criterion=nn.SmoothL1Loss(),
                  validation_criterion=partial(F.mse_loss,reduction='mean'), 
-                 T=1000, 
-                 constants_dict=None, 
                  prediciton_step=1,
                  vae_pop: Optional[nn.Module] = None,
                  vae_land: Optional[nn.Module] = None, 
@@ -224,13 +222,33 @@ class StochasticInterpolentModel(pl.LightningModule):
         return (b_pred, b_true), (eta_pred, z)
 
     def training_step(self, batch, batch_idx):
-        vel_pred, vel_true = self.shared_step(batch, batch_idx)
-        train_loss = self.train_criterion(vel_pred, vel_true)   
+        (b_pred, b_true), (eta_pred, z) = self.shared_step(batch, batch_idx)
+        alpha = 5e-1
+
+        L_b = self.train_criterion(b_pred, b_true)   
+        L_nz = self.train_criterion(eta_pred, z)
+        train_loss = (1-alpha)*L_b + alpha * L_nz
+        self.log("L_b", 
+                 L_b, 
+                 prog_bar=True, 
+                 sync_dist=True,
+                #  on_epoch=True,
+                 on_step=True,
+                 logger=True
+                 )
+        self.log("L_nz", 
+                 L_nz, 
+                 prog_bar=True, 
+                 sync_dist=True,
+                #  on_epoch=True,
+                 on_step=True,
+                 logger=True
+                 )
         self.log("train_loss", 
                  train_loss, 
                  prog_bar=True, 
                  sync_dist=True,
-                #  on_epoch=True,
+                 on_epoch=False,
                  on_step=True,
                  logger=True
                  )
@@ -240,15 +258,23 @@ class StochasticInterpolentModel(pl.LightningModule):
                  current_lr, 
                  prog_bar=True,
                  sync_dist=True, 
-                 on_step=True,
+                 on_step=False,
                  on_epoch=True,
                  logger=True
                  )
         return train_loss
     def validation_step(self, batch, batch_idx):
-        vel_pred, vel_true = self.shared_step(batch, batch_idx)
-        validation_loss = self.validation_criterion(vel_pred, vel_true)   
+        alpha = 5e-1
+        (b_pred, b_true), (eta_pred, z) = self.shared_step(batch, batch_idx)
+        Lb = self.validation_criterion(b_pred, b_true)   
+        Ln = self.validation_criterion(eta_pred, z)
+
+        validation_loss = (1-alpha)*Lb + alpha * Ln 
         # print("Validation loss:", round(validation_loss.item(), 3))
+        self.log("L_b_val", Lb, prog_bar=True, sync_dist=True,
+            logger=True, on_step=False, on_epoch=True)
+        self.log("L_nz_val", Ln, prog_bar=True, sync_dist=True,
+            logger=True, on_step=False, on_epoch=True)
         self.log("val_loss", validation_loss, prog_bar=True, sync_dist=True,
             logger=True, on_step=False, on_epoch=True)
         self.validation_step_outputs.append(validation_loss)
