@@ -351,7 +351,7 @@ if __name__ == '__main__':
     print(f"Nb batches per GPU validation: {nb_batches_per_gpu_validation}")
     print(f"Nb batches per GPU test: {nb_batches_per_gpu_test}")
 
-    unet = StochasticInterpolentModel(
+    unet = Unet_stochinterpolant_1(
             dim=input_dim, #for conditioning 
             init_dim=None,
             out_dim=None,
