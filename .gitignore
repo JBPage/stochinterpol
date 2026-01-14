@@ -73,12 +73,20 @@ instance/
 # Jupyter Notebook
 *.ipynb_checkpoints
 *.ipynb 
+
+# Slurm files
+*.sh
+.vscode/
+# Checkpoint files
+*.ckpt
 # Sphinx documentation
 docs/_build/
 
 # PyBuilder
 .pybuilder/
 target/
+
+
 
 # Jupyter Notebook
 .ipynb_checkpoints

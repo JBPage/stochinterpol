@@ -6,7 +6,7 @@ import argparse
 from models.sdxl_vae import SDXLAELightning
 from models.forward_diffusion import linear_beta_schedule, cosine_beta_schedule, get_alph_bet
 # from Python.DDPM.models.denoiser_models.unet_model import Unet, DenoisingDiffusionModel
-from models.denoiser_models.standard_unet import Unet, Unet_2cond_1inputcondc
+from models.denoiser_models.standard_unet import Unet, Unet_stochinterpolant_1
 from models.stochinterpolmodel import StochasticInterpolentModel
 import os
 from pytorch_lightning import Trainer
@@ -28,6 +28,7 @@ if __name__ == '__main__':
 
     default_config = SimpleNamespace(
         project_name='DDPM',
+        model_name='Unet',
         run_name=None,
         concat_mode='concat',
         map_type='population',
@@ -59,6 +60,11 @@ if __name__ == '__main__':
     # parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument(
         '--project_name', 
+        type=str, 
+        default=default_config.project_name
+        )
+    parser.add_argument(
+        '--model_name', 
         type=str, 
         default=default_config.project_name
         )
@@ -241,7 +247,7 @@ if __name__ == '__main__':
     else :
         nb_channels = 3
         input_dim = 1024
-    model_name = args.project_name + '_ConvNextBlock' + '_pred_{i}'.format(i=args.prediction_step) 
+    model_name = args.project_name + args.model_name + '_pred_{i}'.format(i=args.prediction_step) 
 
 
 
@@ -345,17 +351,16 @@ if __name__ == '__main__':
     print(f"Nb batches per GPU validation: {nb_batches_per_gpu_validation}")
     print(f"Nb batches per GPU test: {nb_batches_per_gpu_test}")
 
-    unet = Unet_2cond_1inputcondc(
+    unet = StochasticInterpolentModel(
             dim=input_dim, #for conditioning 
             init_dim=None,
             out_dim=None,
             dim_mults=(1, 2, 4, 8),
             channels=nb_channels,
             with_time_emb=True,
-            self_condition_size=1, #only population as self condition, landscape as Film condition
             convnext_mult=2,
             GroupNorm=True,
-            film_cond_dim=512,
+            film_cond_dim=1024,
             )
 
     if os.getenv("CKPT_DIR") is None or os.getenv("CKPT_DIR") == "":     

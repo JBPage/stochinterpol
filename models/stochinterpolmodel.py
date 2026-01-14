@@ -8,7 +8,6 @@ from typing import Optional
 import numpy as np
 from torchmetrics.functional import structural_similarity_index_measure as ssim
 from torch.nn.functional import mse_loss
-from models.forward_diffusion import q_sample, extract
 from models.utils_files.nn_utils import *
 from models.denoiser_models.standard_unet import Unet
 from torch.optim.lr_scheduler import LambdaLR, SequentialLR, LinearLR, CosineAnnealingLR,ReduceLROnPlateau, CosineAnnealingWarmRestarts
@@ -94,11 +93,11 @@ class StochasticInterpolentModel(pl.LightningModule):
         print("leaning rate:", self.lr[0])
         if self._external_models["vae"] is not None:
             self._external_models["vae"] = self._external_models["vae"].to(self.device, dtype=self.dtype)
-    def forward(self, x, time, x_cond_1=None, x_cond_2=None,x_cond_3=None):
+    def forward(self, x, time, x_cond_1=None, x_cond_2=None):
         """ x_cond_1 : condition to be concatenated with x at input
             x_cond_2 : condition to be passed to FiLM layers throughout the network
         """ 
-        return self.denoiser(x, time, x_cond_1, x_cond_2, x_cond_3)
+        return self.denoiser(x, time, x_cond_1, x_cond_2)
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr[1])
@@ -167,7 +166,7 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         # Log to Lightning (and thus WandB)
         self.log("grad_norm", total_norm, on_step=True,on_epoch=True, prog_bar=True, logger=True)
-    def shared_step(self, batch, batch_idx, s_func=None):
+    def shared_step(self, batch, batch_idx, gamma_func=None):
         """
         z0: latent at time t
         z1: latent at time t+1
@@ -181,13 +180,15 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         const = 1e-4
         
-        if s_func is None:
-            s_func = lambda t: const * torch.sin(np.pi * t)
+        if gamma_func is None:
+            gamma_func = lambda t: const * torch.sin(np.pi * t)
 
         # derivative of s(t)
         def s_prime(t):
             return const * np.pi * torch.cos(np.pi * t)
 
+        pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor
+        land_scaling_factor = self._external_models["vae_land"].config.scaling_factor
 
         if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
             self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
@@ -197,39 +198,30 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
+            x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
+            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
+            x_cond_k = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
+            x_cond_costhab = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
 
-            # Encode popuolation, k and costhab conditioning data
-            x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample()
-            x_cond_k = condition_data_k #self._external_models["vae_land"].encode(condition_data_k.to(self._external_models["vae_land"].device)).latent_dist.sample() 
-            x_cond_costhab = condition_data_costhab #self._external_models["vae_land"].encode(condition_data_costhab.to(self._external_models["vae_land"].device)).latent_dist.sample()
-            # Encode prediction data
-            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() 
-            # Scale latents back to original range
-            x_cond_pop = x_cond_pop * self._external_models["vae_pop"].config.scaling_factor
-            x_cond_k = x_cond_k * self._external_models["vae_land"].config.scaling_factor
-            x_cond_costhab = x_cond_costhab * self._external_models["vae_land"].config.scaling_factor
-            x = x * self._external_models["vae_pop"].config.scaling_factor
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
-            # x_cond = torch.cat((x_cond_pop, x_cond_k, x_cond_costhab), dim=1).to(self.device)
-            # x_cond_film = F.adaptive_avg_pool2d(x_cond_pop, (32,32)).flatten(1)  # condition vector would be 4*16*16
 
         # sample t ~ Uniform(0,1)
         batch_t = torch.rand(x.shape[0], device=x.device)
 
         # sample Gaussian noise
-        eps = torch.randn_like(x).to(self.device)
+        z = torch.randn_like(x).to(self.device)
 
         # build x(t) = linear interpolant + noise
-        s_t = s_func(batch_t)[:, None, None, None]
+        gamma_t = gamma_func(batch_t)[:, None, None, None]
         x_t = (1 - batch_t)[:, None, None, None] * x_cond_pop \
             + batch_t[:, None, None, None] * x \
-            + s_t * eps
+            + gamma_t * z
 
-        vel_true = (x - x_cond_pop) + s_prime(batch_t)[:, None, None, None] * eps
+        b_true = (x - x_cond_pop) + s_prime(batch_t)[:, None, None, None] * z # true velocity from paper notation
 
-        vel_pred = self.forward(x_t, batch_t, x_cond_pop, x_cond_k, x_cond_costhab)
+        b_pred, eta_pred = self.forward(x_t, batch_t, x_cond_k, x_cond_costhab)
 
-        return vel_pred, vel_true
+        return (b_pred, b_true), (eta_pred, z)
 
     def training_step(self, batch, batch_idx):
         vel_pred, vel_true = self.shared_step(batch, batch_idx)
@@ -275,7 +267,7 @@ class StochasticInterpolentModel(pl.LightningModule):
             import os
 
             # Folder
-            out_dir = "val_losses"
+            out_dir = "./val_losses"
             os.makedirs(out_dir, exist_ok=True)
 
             # Job ID (SLURM first, fallback otherwise)

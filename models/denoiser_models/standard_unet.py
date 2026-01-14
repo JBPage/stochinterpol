@@ -206,7 +206,11 @@ class Unet(nn.Module):
         return self.final_conv(x)
     
 
-class Unet_2cond_1inputcondc(nn.Module):
+class Unet_stochinterpolant_1(nn.Module):
+    " Unet for stochastic interpolant with 2 cond inputs injected through FiLM layers "
+    " Returns two outputs: b and n_z (Stochastic Interpolants: A Unifying Framework for Flows and Diffusions: https://arxiv.org/pdf/2303.08797)"
+    " b: probability flow velocity"
+    " n_z: denoiser → gives score function "
     def __init__(
         self,
         dim, #dimension of input image
@@ -214,8 +218,7 @@ class Unet_2cond_1inputcondc(nn.Module):
         out_dim=None, #nb of channels in the last conv layer
         dim_mults=(1, 2, 4, 8),
         channels=3,
-        with_time_emb=True,
-        self_condition_size=0, # nb of conditions for the input 
+        with_time_emb=True, 
         GroupNorm=True,
         film_cond_dim=None, # dimension of the condition vector for FiLM layers
         convnext_mult=2,
@@ -223,7 +226,6 @@ class Unet_2cond_1inputcondc(nn.Module):
         super().__init__()
 
         # determine dimensions
-        self.self_condition = self_condition_size 
         self.film_cond_dim = film_cond_dim
         self.channels = channels
         init_dim = default(init_dim, dim // 3 * 2)
@@ -290,15 +292,13 @@ class Unet_2cond_1inputcondc(nn.Module):
             )
 
         out_dim = default(out_dim, channels)
-        self.final_conv = nn.Sequential(
+        self.final_conv_b = nn.Sequential(
             block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
         )
-
-    def forward(self, x, time=None, x_cond_pop=None, x_cond_land_1=None, x_cond_land_2=None):
-
-        if self.self_condition:
-            x_self_cond = default(x_cond_pop, lambda: torch.zeros_like(torch.cat((x,x), dim=1)))
-            x = torch.cat((x_self_cond.to(x.device), x), dim=1)
+        self.final_conv_eta = nn.Sequential(
+            block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
+        )
+    def forward(self, x, time=None, x_cond_land_1=None, x_cond_land_2=None):
 
         if self.film_cond_dim is not None and x_cond_land_1.ndim > 2 and x_cond_land_2.ndim > 2:
             x_cond_land_1 = self.land_encoder(x_cond_land_1)
@@ -331,4 +331,6 @@ class Unet_2cond_1inputcondc(nn.Module):
             x = attn(x)
             x = upsample(x)
 
-        return self.final_conv(x)
+        b = self.final_conv_b(x) 
+        eta = self.final_conv_eta(x)
+        return b, eta
