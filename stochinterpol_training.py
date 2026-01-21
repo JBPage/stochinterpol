@@ -6,7 +6,7 @@ import argparse
 from models.sdxl_vae import SDXLAELightning
 from models.forward_diffusion import linear_beta_schedule, cosine_beta_schedule, get_alph_bet
 # from Python.DDPM.models.denoiser_models.unet_model import Unet, DenoisingDiffusionModel
-from models.denoiser_models.standard_unet import Unet, Unet_stochinterpolant_1
+from models.denoiser_models.standard_unet import Unet, Unet_stochinterpolant_1, Unet_filmconcat_cond
 from models.stochinterpolmodel import StochasticInterpolentModel
 import os
 from pytorch_lightning import Trainer
@@ -247,7 +247,7 @@ if __name__ == '__main__':
     else :
         nb_channels = 3
         input_dim = 1024
-    model_name = args.project_name + args.model_name + '_pred_{i}'.format(i=args.prediction_step) 
+    model_name = args.project_name + '_' + args.model_name + '_pred_{i}'.format(i=args.prediction_step) 
 
 
 
@@ -351,16 +351,17 @@ if __name__ == '__main__':
     print(f"Nb batches per GPU validation: {nb_batches_per_gpu_validation}")
     print(f"Nb batches per GPU test: {nb_batches_per_gpu_test}")
 
-    unet = Unet_stochinterpolant_1(
+    unet = Unet_filmconcat_cond(
             dim=input_dim, #for conditioning 
             init_dim=None,
             out_dim=None,
             dim_mults=(1, 2, 4, 8),
             channels=nb_channels,
+            self_condition_size=2,
             with_time_emb=True,
             convnext_mult=2,
             GroupNorm=True,
-            film_cond_dim=1024,
+            # film_cond_dim=1024,
             )
 
     if os.getenv("CKPT_DIR") is None or os.getenv("CKPT_DIR") == "":     

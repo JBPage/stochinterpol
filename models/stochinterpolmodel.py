@@ -91,11 +91,11 @@ class StochasticInterpolentModel(pl.LightningModule):
         print("leaning rate:", self.lr[0])
         if self._external_models["vae"] is not None:
             self._external_models["vae"] = self._external_models["vae"].to(self.device, dtype=self.dtype)
-    def forward(self, x, time, x_cond_1=None, x_cond_2=None):
+    def forward(self, x, time, x_cond_1=None, x_condfilm_1=None, x_condfilm_2=None):
         """ x_cond_1 : condition to be concatenated with x at input
             x_cond_2 : condition to be passed to FiLM layers throughout the network
         """ 
-        return self.denoiser(x, time, x_cond_1, x_cond_2)
+        return self.denoiser(x, time, x_cond_1, x_condfilm_1, x_condfilm_2)
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr[1])
@@ -198,9 +198,9 @@ class StochasticInterpolentModel(pl.LightningModule):
         with torch.no_grad():
             x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
             x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
-            x_cond_k = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
-            x_cond_costhab = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
-
+            x_condfilm_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
+            x_condfilm_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
+            x_cond_1 = (x_condfilm_1, x_condfilm_2)
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
 
         # sample t ~ Uniform(0,1)
@@ -217,17 +217,17 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         b_true = (x - x_cond_pop) + s_prime(batch_t)[:, None, None, None] * z # true velocity from paper notation
 
-        b_pred, eta_pred = self.forward(x_t, batch_t, x_cond_k, x_cond_costhab)
+        b_pred, eta_pred = self.forward(x_t, batch_t, x_cond_1, x_condfilm_1, x_condfilm_2)
 
-        return (b_pred, b_true), (eta_pred, z)
+        return (b_pred, b_true), (eta_pred, z), gamma_t
 
     def training_step(self, batch, batch_idx):
-        (b_pred, b_true), (eta_pred, z) = self.shared_step(batch, batch_idx)
-        alpha = 5e-1
+        (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
+        lambda_eta = gamma_t.mean()**2
 
         L_b = self.train_criterion(b_pred, b_true)   
         L_nz = self.train_criterion(eta_pred, z)
-        train_loss = (1-alpha)*L_b + alpha * L_nz
+        train_loss = L_b + lambda_eta * L_nz
         self.log("L_b", 
                  L_b, 
                  prog_bar=True, 
@@ -264,12 +264,13 @@ class StochasticInterpolentModel(pl.LightningModule):
                  )
         return train_loss
     def validation_step(self, batch, batch_idx):
-        alpha = 5e-1
-        (b_pred, b_true), (eta_pred, z) = self.shared_step(batch, batch_idx)
+        (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
+        lambda_eta = gamma_t.mean()**2
+
         Lb = self.validation_criterion(b_pred, b_true)   
         Ln = self.validation_criterion(eta_pred, z)
 
-        validation_loss = (1-alpha)*Lb + alpha * Ln 
+        validation_loss = Lb + lambda_eta * Ln
         # print("Validation loss:", round(validation_loss.item(), 3))
         self.log("L_b_val", Lb, prog_bar=True, sync_dist=True,
             logger=True, on_step=False, on_epoch=True)
