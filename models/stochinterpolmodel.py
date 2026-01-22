@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 from torchmetrics.functional import structural_similarity_index_measure as ssim
 from torch.nn.functional import mse_loss
+import bitsandbytes as bnb
 from models.utils_files.nn_utils import *
 from models.denoiser_models.standard_unet import Unet
 from torch.optim.lr_scheduler import LambdaLR, SequentialLR, LinearLR, CosineAnnealingLR,ReduceLROnPlateau, CosineAnnealingWarmRestarts
@@ -98,7 +99,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         return self.denoiser(x, time, x_cond_1, x_condfilm_1, x_condfilm_2)
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr[1])
+        optimizer = bnb.optim.Adam8bit(self.denoiser.parameters(), lr=self.lr[1]) #torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr[1])
         
         total_steps = (self.trainer.limit_train_batches * self.trainer.max_epochs) // self.trainer.accumulate_grad_batches
         warmup_steps = total_steps // 10 if total_steps < 1000 else 1000

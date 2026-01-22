@@ -18,6 +18,7 @@ from collections import OrderedDict
 from functools import partial
 
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from types import SimpleNamespace
 from datetime import date
@@ -406,8 +407,9 @@ if __name__ == '__main__':
                                     # check_on_train_epoch_end=False,  # Important if you log only at val epoch end
                                     # strict=False  # <-- Add this!
                                    )
+
     wandb_logger = None
-    if os.getenv("WANDB_API_KEY") is not None:
+    if os.getenv("WANDB_API_KEY") not in [None, ""] and rank_zero_only.rank == 0:
         wandb.login(key=os.getenv("WANDB_API_KEY"))
         wandb.init(
             project=args.project_name,  # Specify your project
@@ -488,7 +490,7 @@ if __name__ == '__main__':
         model.load_state_dict(checkpoint['state_dict'], strict=False)
         ckpt_path = None  # Avoid loading again in trainer.fit()
 
-    if os.getenv("WANDB_API_KEY") is not None:
+    if wandb_logger is not None:
         wandb_logger.watch(model, log="all", log_freq=100)
         log_wandb_config(wandb_logger, args)
 
@@ -498,7 +500,8 @@ if __name__ == '__main__':
         trainer.fit(
             model=model,
             datamodule=data_module,
-            ckpt_path=ckpt_path
+            ckpt_path=ckpt_path,
+            weights_only=False
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")
