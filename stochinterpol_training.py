@@ -15,7 +15,8 @@ from pytorch_lightning.profilers import PyTorchProfiler
 
 import wandb
 from collections import OrderedDict
-from functools import partial
+import functools
+from torch.serialization import add_safe_globals
 
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
@@ -23,6 +24,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from types import SimpleNamespace
 from datetime import date
 from peft import LoraConfig
+
+add_safe_globals([functools.partial])
 
 
 if __name__ == '__main__':
@@ -154,7 +157,7 @@ if __name__ == '__main__':
         default=default_config.normalize
         )
     parser.add_argument(
-        'weights_only',
+        '--weights_only',
         action=argparse.BooleanOptionalAction,
         default=default_config.weights_only
         )
@@ -395,6 +398,7 @@ if __name__ == '__main__':
         # checkpoint = torch.load(ckpt_path, map_location='cpu')
         # unet.load_state_dict(checkpoint)
 
+
     checkpoint_callback = ModelCheckpoint(
         dirpath=model_folder,
         monitor='val_loss',
@@ -492,6 +496,11 @@ if __name__ == '__main__':
         wandb_logger.watch(model, log="all", log_freq=100)
         log_wandb_config(wandb_logger, args)
 
+    if ckpt_path is not None and args.weights_only:
+        print("Loading weights only from checkpoint:", ckpt_path)
+        checkpoint = torch.load(ckpt_path, weights_only=False, map_location='cpu')
+        model.load_state_dict(checkpoint['state_dict'])
+        ckpt_path = None  # To avoid loading the full checkpoint again in trainer.fit()
 
     if args.run_mode == 'train':
         print("Starting training...")
@@ -499,7 +508,7 @@ if __name__ == '__main__':
             model=model,
             datamodule=data_module,
             ckpt_path=ckpt_path,
-            weights_only=args.weights_only if ckpt_path is not None else False
+            # weights_only=args.weights_only if ckpt_path is not None else False
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")

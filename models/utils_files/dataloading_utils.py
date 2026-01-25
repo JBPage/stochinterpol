@@ -508,8 +508,8 @@ class MyDataModule(pl.LightningDataModule):
 @rank_zero_only
 def log_wandb_config(wandb_logger, args):
     wandb_logger.experiment.config.update({
-        'lr_min': args.lr_min,
-        'lr_max': args.lr_max,
+        # 'lr_min': args.lr_min,
+        'lr_start': args.lr_start,
         'epochs': args.epochs,
         'batch_size': args.batch_size,
         'num_channel': args.num_channel,

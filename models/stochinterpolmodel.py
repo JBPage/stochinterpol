@@ -89,7 +89,7 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         
     def on_fit_start(self):
-        print("leaning rate:", self.lr[0])
+        # print("leaning rate:", self.lr[0])
         if self._external_models["vae"] is not None:
             self._external_models["vae"] = self._external_models["vae"].to(self.device, dtype=self.dtype)
     def forward(self, x, time, x_cond_1=None, x_condfilm_1=None, x_condfilm_2=None):
@@ -105,12 +105,12 @@ class StochasticInterpolentModel(pl.LightningModule):
         total_steps = (self.trainer.limit_train_batches * self.trainer.max_epochs) // self.trainer.accumulate_grad_batches
         warmup_steps = total_steps // 10 if total_steps < 1000 else 1000
 
-        warmup_scheduler = LinearLR(
-            optimizer, 
-            total_iters=warmup_steps, 
-            start_factor=self.lr[0]/self.lr[1], 
-            end_factor=1.0
-        )
+        # warmup_scheduler = LinearLR(
+        #     optimizer, 
+        #     total_iters=warmup_steps, 
+        #     start_factor=self.lr[0]/self.lr[1], 
+        #     end_factor=1.0
+        # )
 
         if self.scheduler == "constant":
             # Trivial scheduler: LR stays fixed
@@ -150,8 +150,11 @@ class StochasticInterpolentModel(pl.LightningModule):
         # Combine warmup and cosine
         scheduler = SequentialLR(
             optimizer,
-            schedulers=[warmup_scheduler, lr_scheduler],
-            milestones=[warmup_steps]
+            schedulers=[
+                # warmup_scheduler, 
+                lr_scheduler
+                ],
+            # milestones=[warmup_steps]
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
 
