@@ -36,8 +36,7 @@ if __name__ == '__main__':
         save_model=False,
         normalize=False,
         latent_diffusion=False,
-        lr_min=1e-5,
-        lr_max=1e-4,
+        lr_start=1e-4,
         epochs=50,
         gradient_accumulation_steps=1,
         criterion='mse',
@@ -46,6 +45,7 @@ if __name__ == '__main__':
         trainer_strategy='ddp',
         lr_scheduler='plateau',  # 'constant', 'cosine', 'cosine_restart', 'plateau'
         mixed_precision=False,
+        weights_only=False,
         gpus=1,
         cpus=1,
         save_model_vae=False,
@@ -116,15 +116,15 @@ if __name__ == '__main__':
         default=default_config.save_model,
         help="activate saving of the model"
         )
+    # parser.add_argument(
+    #     '--lr_min', 
+    #     type=float, 
+    #     default=default_config.lr_min
+    #     )
     parser.add_argument(
-        '--lr_min', 
+        '--lr_start', 
         type=float, 
-        default=default_config.lr_min
-        )
-    parser.add_argument(
-        '--lr_max', 
-        type=float, 
-        default=default_config.lr_max
+        default=default_config.lr_start
         )
     parser.add_argument(
         '--cpus', 
@@ -152,6 +152,11 @@ if __name__ == '__main__':
         '--normalize',
         action=argparse.BooleanOptionalAction,
         default=default_config.normalize
+        )
+    parser.add_argument(
+        'weights_only',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.weights_only
         )
     parser.add_argument(
         '--save_model_vae',
@@ -227,7 +232,6 @@ if __name__ == '__main__':
 
     today = date.today()
     formatted = today.strftime("%Y_%m_%d")
-    lr = [min(args.lr_min, args.lr_max), max(args.lr_min, args.lr_max)]
     
     # Hyperparameters
     if args.criterion == 'mse':
@@ -477,18 +481,12 @@ if __name__ == '__main__':
         denoiser=unet,
         # criterion=criterion,
         trainer=trainer,
-        lr=lr,
+        lr=args.lr_start,
         save_vae=args.save_model_vae,
         vae_pop=vae_pop if args.latent_diffusion else None,
         vae_land=vae_land if args.latent_diffusion else None,
         scheduler=args.lr_scheduler,
         )
-    if os.getenv("WEIGHTS_PATH") is not None and os.getenv("WEIGHTS_PATH") != "":
-        weights_path = os.getenv("WEIGHTS_PATH")
-        print("Loading model weights from:", weights_path)
-        checkpoint = torch.load(weights_path, weights_only=False, map_location=torch.device('cpu'))
-        model.load_state_dict(checkpoint['state_dict'], strict=False)
-        ckpt_path = None  # Avoid loading again in trainer.fit()
 
     if wandb_logger is not None:
         wandb_logger.watch(model, log="all", log_freq=100)
@@ -501,7 +499,7 @@ if __name__ == '__main__':
             model=model,
             datamodule=data_module,
             ckpt_path=ckpt_path,
-            weights_only=False
+            weights_only=args.weights_only if ckpt_path is not None else False
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")

@@ -99,7 +99,8 @@ class StochasticInterpolentModel(pl.LightningModule):
         return self.denoiser(x, time, x_cond_1, x_condfilm_1, x_condfilm_2)
     
     def configure_optimizers(self):
-        optimizer = bnb.optim.Adam8bit(self.denoiser.parameters(), lr=self.lr[1]) #torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr[1])
+        # optimizer = bnb.optim.Adam8bit(self.denoiser.parameters(), lr=self.lr[1]) 
+        optimizer = torch.optim.AdamW(self.denoiser.parameters(), lr=self.lr)
         
         total_steps = (self.trainer.limit_train_batches * self.trainer.max_epochs) // self.trainer.accumulate_grad_batches
         warmup_steps = total_steps // 10 if total_steps < 1000 else 1000
