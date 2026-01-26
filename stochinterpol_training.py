@@ -12,6 +12,9 @@ import os
 from pytorch_lightning import Trainer
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.profilers import PyTorchProfiler
+import torch.nn.functional as F
+from functools import partial
+import ast
 
 import wandb
 from collections import OrderedDict
@@ -38,10 +41,12 @@ if __name__ == '__main__':
         map_type='population',
         save_model=False,
         normalize=False,
+        data_shuffle=False,
         latent_diffusion=False,
         lr_start=1e-4,
         epochs=50,
         gradient_accumulation_steps=1,
+        dim_mults='(1, 2, 4, 8)',
         criterion='mse',
         data_type='float32',
         prediction_step=1,
@@ -157,6 +162,11 @@ if __name__ == '__main__':
         default=default_config.normalize
         )
     parser.add_argument(
+        '--data_shuffle',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.data_shuffle
+        )
+    parser.add_argument(
         '--weights_only',
         action=argparse.BooleanOptionalAction,
         default=default_config.weights_only
@@ -191,6 +201,11 @@ if __name__ == '__main__':
         type=str,
         default=None,
         help="Path to the checkpoint file"
+        )
+    parser.add_argument(
+        '--dim_mults',
+        type=str,
+        default=default_config.dim_mults
         )
     parser.add_argument(
         '--trainer_strategy',
@@ -363,7 +378,7 @@ if __name__ == '__main__':
             dim=input_dim, #for conditioning 
             init_dim=None,
             out_dim=None,
-            dim_mults=(1, 2, 4, 8),
+            dim_mults=ast.literal_eval(args.dim_mults),
             channels=nb_channels,
             self_condition_size=2,
             with_time_emb=True,
@@ -456,13 +471,13 @@ if __name__ == '__main__':
         )
     trainer = Trainer(
         # For debugging purposes, you can uncomment the following lines:
-        # limit_train_batches=50,         # profile only a few batches first
+        limit_train_batches=1,         # profile only a few batches first
         # limit_val_batches=1,
         # enable_checkpointing=False,    # to reduce noise during profiling
         # profiler=profiler,
         # For training:
-        limit_train_batches=nb_batches_per_gpu_train,
-        limit_val_batches=nb_batches_per_gpu_validation,
+        # limit_train_batches=nb_batches_per_gpu_train,
+        # limit_val_batches=nb_batches_per_gpu_validation,
         limit_test_batches=nb_batches_per_gpu_test,
         logger=wandb_logger,
         callbacks=[
@@ -484,6 +499,7 @@ if __name__ == '__main__':
     model = StochasticInterpolentModel(
         denoiser=unet,
         # criterion=criterion,
+        train_criterion=partial(F.mse_loss,reduction='mean'),
         trainer=trainer,
         lr=args.lr_start,
         save_vae=args.save_model_vae,
@@ -508,7 +524,7 @@ if __name__ == '__main__':
             model=model,
             datamodule=data_module,
             ckpt_path=ckpt_path,
-            # weights_only=args.weights_only if ckpt_path is not None else False
+            weights_only=False
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")
