@@ -362,7 +362,7 @@ if __name__ == '__main__':
     print(f"Nb batches per GPU validation: {nb_batches_per_gpu_validation}")
     print(f"Nb batches per GPU test: {nb_batches_per_gpu_test}")
 
-    unet = Unet_filmconcat_cond(
+    unet = Unet(
             dim=input_dim, #for conditioning 
             init_dim=None,
             out_dim=None,
@@ -486,7 +486,7 @@ if __name__ == '__main__':
     model = StochasticInterpolentModel(
         denoiser=unet,
         # criterion=criterion,
-        train_criterion=partial(F.mse_loss,reduction='mean'),
+        # train_criterion=partial(F.mse_loss,reduction='mean'),
         trainer=trainer,
         lr=args.lr_start,
         save_vae=args.save_model_vae,
