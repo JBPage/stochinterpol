@@ -446,13 +446,11 @@ def load_data(train_dataset, validation_dataset, test_dataset, file_path, normal
                 test_dataset.append(tensor_map.repeat(3,1,1))
 
 class MyDataModule(pl.LightningDataModule):
-    def __init__(self, args, train_folders, validation_folders, train_threshold,validation_threshold, years, vae=None,data_type=torch.float32):
+    def __init__(self, args, train_folders, validation_folders, years, vae=None,data_type=torch.float32):
         super().__init__()
         self.args = args
         self.train_folders = train_folders
         self.validation_folders = validation_folders
-        self.train_threshold = train_threshold
-        self.validation_threshold = validation_threshold
         self.years = years
         self.vae = vae
         self.data_type = data_type

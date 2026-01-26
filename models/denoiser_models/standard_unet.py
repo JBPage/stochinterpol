@@ -172,9 +172,9 @@ class Unet(nn.Module):
 
     def forward(self, x, time=None, x_cond_1=None, x_cond_2=None):
 
-        if self.self_condition:
+        if x_cond_1 is not None:
             x_self_cond = default(x_cond_1, lambda: torch.zeros_like(torch.cat((x,x), dim=1)))
-            x = torch.cat((x_self_cond.to(x.device), x), dim=1)
+            x = torch.cat((x,)+tuple(t.to(x.device) for t in x_self_cond), dim=1)
 
         x = self.init_conv(x)
 

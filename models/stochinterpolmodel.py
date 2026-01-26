@@ -511,7 +511,7 @@ class UnetModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x_pred, x_true = self.shared_step(batch, batch_idx)
-        train_loss = self.training_criterion(x_pred, x_true)
+        train_loss = self.train_criterion(x_pred, x_true)
 
         self.log("train_loss", 
                  train_loss, 

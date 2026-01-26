@@ -7,7 +7,7 @@ from models.sdxl_vae import SDXLAELightning
 from models.forward_diffusion import linear_beta_schedule, cosine_beta_schedule, get_alph_bet
 # from Python.DDPM.models.denoiser_models.unet_model import Unet, DenoisingDiffusionModel
 from models.denoiser_models.standard_unet import Unet, Unet_stochinterpolant_1, Unet_filmconcat_cond
-from models.stochinterpolmodel import StochasticInterpolentModel
+from models.stochinterpolmodel import UnetModel
 import os
 from pytorch_lightning import Trainer
 from pytorch_lightning.strategies import DDPStrategy
@@ -250,8 +250,6 @@ if __name__ == '__main__':
         data_type = torch.float16
     elif args.data_type == 'float64':
         data_type = torch.float64
-    train_threshold = int(args.train_ratio * 20)
-    validation_threshold = int((args.train_ratio + args.validation_ratio) * 20)
     if args.latent_diffusion:
         nb_channels = 4
         input_dim = 128
@@ -333,8 +331,6 @@ if __name__ == '__main__':
         args=args,
         train_folders=train_dataset_folder,
         validation_folders=validation_data_folder,
-        train_threshold=train_threshold,
-        validation_threshold=validation_threshold,
         years=list_years,
         data_type=data_type
         )
@@ -346,10 +342,10 @@ if __name__ == '__main__':
     #     print("Batch shapes:", cond.shape, pred.shape)
     #     break
 
-    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step) * len(range(0, train_threshold))
-    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * len(range(train_threshold, validation_threshold))
-    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * len(range(validation_threshold, 20))
-    
+    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step)
+    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step)
+    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step)
+
     nb_batches_per_gpu_train = train_dataset_length//args.batch_size//torch.cuda.device_count()
     nb_batches_per_gpu_validation = validation_dataset_length//args.batch_size//torch.cuda.device_count()
     nb_batches_per_gpu_test = test_dataset_length//args.batch_size//torch.cuda.device_count()
@@ -368,7 +364,7 @@ if __name__ == '__main__':
             out_dim=None,
             dim_mults=ast.literal_eval(args.dim_mults),
             channels=nb_channels,
-            self_condition_size=3,
+            self_condition_size=2,
             with_time_emb=False,
             convnext_mult=2,
             GroupNorm=True,
@@ -458,13 +454,13 @@ if __name__ == '__main__':
         )
     trainer = Trainer(
         # For debugging purposes, you can uncomment the following lines:
-        limit_train_batches=1,         # profile only a few batches first
-        limit_val_batches=1,
+        # limit_train_batches=1,         # profile only a few batches first
+        # limit_val_batches=1,
         # enable_checkpointing=False,    # to reduce noise during profiling
         # profiler=profiler,
         # For training:
-        # limit_train_batches=nb_batches_per_gpu_train,
-        # limit_val_batches=nb_batches_per_gpu_validation,
+        limit_train_batches=nb_batches_per_gpu_train,
+        limit_val_batches=nb_batches_per_gpu_validation,
         limit_test_batches=nb_batches_per_gpu_test,
         logger=wandb_logger,
         callbacks=[
@@ -483,8 +479,8 @@ if __name__ == '__main__':
         accumulate_grad_batches=args.gradient_accumulation_steps,
         max_epochs=args.epochs
         )
-    model = StochasticInterpolentModel(
-        denoiser=unet,
+    model = UnetModel(
+        unet=unet,
         # criterion=criterion,
         # train_criterion=partial(F.mse_loss,reduction='mean'),
         trainer=trainer,
