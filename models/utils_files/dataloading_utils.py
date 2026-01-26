@@ -8,6 +8,7 @@ import h5py
 import copy
 import wandb
 import numpy as np
+import random
 import pandas as pd
 import os 
 import torch.distributed as dist
@@ -333,7 +334,8 @@ class MyDistributedIterableDataset(IterableDataset):
                             all_pairs.append((folder, k_map, costhab_map, rep, year))
 
         # Shuffle and split across all workers
-        # random.shuffle(all_pairs)
+        if self.__args.data_shuffle:
+            random.shuffle(all_pairs)
         all_pairs = all_pairs[global_worker_id::global_num_workers]
 
         # Batching
@@ -365,7 +367,7 @@ class MyDistributedIterableDataset(IterableDataset):
                 map_now = map_now / (torch.amax(map_now, dim=(-2, -1), keepdim=True) + 1e-8)
                 map_future = map_future / (torch.amax(map_future, dim=(-2, -1), keepdim=True) + 1e-8)
                 delta_map = delta_map / (torch.amax(delta_map, dim=(-2, -1), keepdim=True) + 1e-8)
-
+    
             # Prepare input tensors
             # cond_pop = pad(map_now).repeat(1, 3, 1, 1)
             # cond_land = torch.cat([
