@@ -507,7 +507,6 @@ if __name__ == '__main__':
             model=model,
             datamodule=data_module,
             ckpt_path=ckpt_path,
-            weights_only=False
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")
