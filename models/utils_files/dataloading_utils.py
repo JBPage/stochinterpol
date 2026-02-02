@@ -336,7 +336,7 @@ class MyDistributedIterableDataset(IterableDataset):
                         else: 
                             rep_years = [self.__years[0]] + rep_years
                     for year in rep_years:
-                        print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}, year prediction step: {year +self.__prediction_step}")
+                        # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}, year prediction step: {year +self.__prediction_step}")
                         key_now = f"rep_{rep}_year_{year}"
                         key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
                         if key_now in pop_map_h5 and key_future in pop_map_h5:
@@ -481,7 +481,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=True,
+            pin_memory=False,
         )
     def val_dataloader(self):
         dataset = MyDistributedIterableDataset(
@@ -496,7 +496,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=True
+            pin_memory=False,
         )
     def test_dataloader(self):
         dataset = MyDistributedIterableDataset(
@@ -511,7 +511,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=True
+            pin_memory=False,
         )
     
 @rank_zero_only
