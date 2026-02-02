@@ -94,7 +94,7 @@ class Unet(nn.Module):
         with_time_emb=True,
         self_condition_size=0, # nb of conditions for the input 
         GroupNorm=True,
-        film_cond_dim=None, # dimension of the condition vector for FiLM layers
+        film_cond_dim={'LandEncoder_channels':None, 'FiLM_vector_size':None}, # dimension of the condition vector for FiLM layers
         convnext_mult=2,
     ):
         super().__init__()
@@ -111,7 +111,7 @@ class Unet(nn.Module):
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
         
-        block_klass_film = partial(ConvNextBlock, mult=convnext_mult, cond_dim=film_cond_dim) if GroupNorm else partial(ConvNextBlock_batchnorm, mult=convnext_mult, cond_dim=film_cond_dim)
+        block_klass_film = partial(ConvNextBlock, mult=convnext_mult, cond_dim=film_cond_dim['FiLM_vector_size']) if GroupNorm else partial(ConvNextBlock_batchnorm, mult=convnext_mult, cond_dim=film_cond_dim['FiLM_vector_size'])
         block_klass = partial(ConvNextBlock, mult=convnext_mult) if GroupNorm else partial(ConvNextBlock, mult=convnext_mult)
 
         # time embeddings
@@ -126,6 +126,8 @@ class Unet(nn.Module):
         else:
             time_dim = None
             self.time_mlp = None
+        # land encoder
+        self.land_encoder = LandEncoder(in_channels=film_cond_dim['LandEncoder_channels'], embed_dim = film_cond_dim['FiLM_vector_size']) if film_cond_dim['LandEncoder_channels'] is not None else None
 
         # layers
         self.downs = nn.ModuleList([])
@@ -147,9 +149,11 @@ class Unet(nn.Module):
             )
 
         mid_dim = dims[-1]
-        self.mid_block1 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        # self.mid_block1 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block1 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
         self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
-        self.mid_block2 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block2 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        # self.mid_block2 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
             is_last = ind >= (num_resolutions - 1)
@@ -157,8 +161,10 @@ class Unet(nn.Module):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
-                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        block_klass_film(dim_in, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        # block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        # block_klass(dim_in, dim_in, time_emb_dim=time_dim),
                         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Upsample(dim_in) if not is_last else nn.Identity(),
                     ]
@@ -173,17 +179,22 @@ class Unet(nn.Module):
     def forward(self, x, time=None, x_cond_1=None, x_cond_2=None):
 
         if x_cond_1 is not None:
+            
             x_self_cond = default(x_cond_1, lambda: torch.zeros_like(torch.cat((x,x), dim=1)))
             x = torch.cat((x,)+tuple(t.to(x.device) for t in x_self_cond), dim=1)
-
+        
+        assert x.shape[1] == self.init_conv.in_channels
         x = self.init_conv(x)
+
+        if self.film_cond_dim['LandEncoder_channels'] is not None and x_cond_2.ndim > 2 :
+            x_cond_2 = self.land_encoder(x_cond_2)
 
         t = self.time_mlp(time) if exists(self.time_mlp) else None
 
         h = []
 
         # downsample
-        for block1, block2, attn, downsample in self.downs:
+        for block1, block2,attn, downsample in self.downs:
             x = block1(x, t)
             x = block2(x, t)
             x = attn(x)
@@ -191,15 +202,17 @@ class Unet(nn.Module):
             x = downsample(x)
 
         # bottleneck
-        x = self.mid_block1(x, t, x_cond_2) if self.film_cond_dim is not None else self.mid_block1(x, t)
+        x = self.mid_block1(x, t, x_cond_2) if self.film_cond_dim['FiLM_vector_size'] is not None else self.mid_block1(x, t)
         x = self.mid_attn(x)
-        x = self.mid_block2(x, t, x_cond_2) if self.film_cond_dim is not None else self.mid_block2(x, t)
+        x = self.mid_block2(x, t, x_cond_2) if self.film_cond_dim['FiLM_vector_size'] is not None else self.mid_block2(x, t)
 
         # upsample
         for block1, block2, attn, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
-            x = block1(x, t, x_cond_2) if self.film_cond_dim is not None else block1(x, t)
-            x = block2(x, t)
+            # x = block1(x, t)
+            # x = block2(x,t)
+            x = block1(x, t, x_cond_2) if self.film_cond_dim['FiLM_vector_size'] is not None else block1(x, t)
+            x = block2(x, t, x_cond_2) if self.film_cond_dim['FiLM_vector_size'] is not None else block2(x, t)
             x = attn(x)
             x = upsample(x)
 
@@ -220,24 +233,24 @@ class Unet_filmconcat_cond(nn.Module):
         with_time_emb=True,
         self_condition_size=0, # nb of conditions for the input 
         GroupNorm=True,
-        film_cond_dim=None, # dimension of the condition vector for FiLM layers
+        film_cond_dim={'LandEncoder_channels':None, 'FiLM_vector_size':None}, # dimension of the condition vector for FiLM layers
         convnext_mult=2,
     ):
         super().__init__()
 
         # determine dimensions
-        self.self_condition = self_condition_size
+        self.self_condition = self_condition_size 
         self.film_cond_dim = film_cond_dim
         self.channels = channels
         init_dim = default(init_dim, dim // 3 * 2)
 
-        self.init_conv = nn.Conv2d((self_condition_size + 1) * channels, init_dim, 7, padding=3)
+        self.init_conv = nn.Conv2d((self.self_condition+1)*channels, init_dim, 7, padding=3)
         
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
         
-        block_klass_film = partial(ConvNextBlock, mult=convnext_mult, cond_dim=film_cond_dim) if GroupNorm else partial(ConvNextBlock_batchnorm, mult=convnext_mult, cond_dim=film_cond_dim)
+        block_klass_film = partial(ConvNextBlock, mult=convnext_mult, cond_dim=film_cond_dim['FiLM_vector_size']) if GroupNorm else partial(ConvNextBlock_batchnorm, mult=convnext_mult, cond_dim=film_cond_dim['FiLM_vector_size'])
         block_klass = partial(ConvNextBlock, mult=convnext_mult) if GroupNorm else partial(ConvNextBlock, mult=convnext_mult)
 
         # time embeddings
@@ -253,7 +266,8 @@ class Unet_filmconcat_cond(nn.Module):
             time_dim = None
             self.time_mlp = None
         # land encoder
-        self.land_encoder = LandEncoder(in_channels= channels, embed_dim = film_cond_dim) if film_cond_dim is not None else None
+        self.land_encoder = LandEncoder(in_channels=film_cond_dim['LandEncoder_channels'], embed_dim = film_cond_dim['FiLM_vector_size']) if film_cond_dim['LandEncoder_channels'] is not None else None
+
         # layers
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
@@ -267,16 +281,16 @@ class Unet_filmconcat_cond(nn.Module):
                     [
                         block_klass(dim_in, dim_out, time_emb_dim=time_dim),
                         block_klass(dim_out, dim_out, time_emb_dim=time_dim),
-                        Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                        # Residual(PreNorm(dim_out, LinearAttention(dim_out))),
                         Downsample(dim_out) if not is_last else nn.Identity(),
                     ]
                 )
             )
 
         mid_dim = dims[-1]
-        self.mid_block1 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
-        self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
-        self.mid_block2 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block1 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        # self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
+        self.mid_block2 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
             is_last = ind >= (num_resolutions - 1)
@@ -284,9 +298,11 @@ class Unet_filmconcat_cond(nn.Module):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
-                        block_klass_film(dim_in, dim_in, time_emb_dim=time_dim) if film_cond_dim is not None else block_klass(dim_in, dim_in, time_emb_dim=time_dim),
-                        Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                        # block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        # block_klass_film(dim_in, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        # Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Upsample(dim_in) if not is_last else nn.Identity(),
                     ]
                 )
@@ -299,14 +315,13 @@ class Unet_filmconcat_cond(nn.Module):
         self.final_conv_eta = nn.Sequential(
             block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
         )
-    def forward(self, x, time=None, x_cond_1=None, x_condfilm_1=None, x_condfilm_2=None):
+    def forward(self, x, time=None, x_cond_1=None, x_condfilm=None):
         if x_cond_1 is not None:
             x_self_cond = default(x_cond_1, lambda: torch.zeros_like(torch.cat((x,x), dim=1)))
             x = torch.cat((x,)+tuple(t.to(x.device) for t in x_self_cond), dim=1)
 
-        if self.film_cond_dim is not None and x_condfilm_1.ndim > 2 and x_condfilm_2.ndim > 2:
-            x_condfilm_1 = self.land_encoder(x_condfilm_1)
-            x_condfilm_2 = self.land_encoder(x_condfilm_2)
+        if self.land_encoder is not None and x_condfilm.ndim > 2:
+            x_condfilm = self.land_encoder(x_condfilm)
 
         x = self.init_conv(x)
 
@@ -315,24 +330,24 @@ class Unet_filmconcat_cond(nn.Module):
         h = []
 
         # downsample
-        for block1, block2, attn, downsample in self.downs:
+        for block1, block2, downsample in self.downs:
             x = block1(x, t)
             x = block2(x, t)
-            x = attn(x)
+            # x = attn(x)
             h.append(x)
             x = downsample(x)
 
         # bottleneck
-        x = self.mid_block1(x, t, x_condfilm_1) if self.film_cond_dim is not None else self.mid_block1(x, t)
-        x = self.mid_attn(x)
-        x = self.mid_block2(x, t, x_condfilm_2) if self.film_cond_dim is not None else self.mid_block2(x, t)
+        x = self.mid_block1(x, t, x_condfilm) if self.film_cond_dim is not None else self.mid_block1(x, t)
+        # x = self.mid_attn(x)
+        x = self.mid_block2(x, t, x_condfilm) if self.film_cond_dim is not None else self.mid_block2(x, t)
 
         # upsample
-        for block1, block2, attn, upsample in self.ups:
+        for block1, block2, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
-            x = block1(x, t, x_condfilm_1) if self.film_cond_dim is not None else block1(x, t)
-            x = block2(x, t, x_condfilm_2) if self.film_cond_dim is not None else block2(x, t)
-            x = attn(x)
+            x = block1(x, t, x_condfilm) if self.film_cond_dim is not None else block1(x, t)
+            x = block2(x, t, x_condfilm) if self.film_cond_dim is not None else block2(x, t)
+            # x = attn(x)
             x = upsample(x)
 
         return self.final_conv_b(x), self.final_conv_eta(x)

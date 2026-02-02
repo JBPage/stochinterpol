@@ -277,7 +277,7 @@ class MyDataset(torch.utils.data.Dataset):
         return cond_pop, cond_land, pred
     
 class MyDistributedIterableDataset(IterableDataset):
-    def __init__(self, args, folders, reps=range(20), years=range(51),data_type=torch.float32, precompressed_landscape=True):
+    def __init__(self, args, folders, reps=range(20), years=range(10,51),data_type=torch.float32, precompressed_landscape=True, year_leap=1):
         super().__init__()
         self.__args = args
         self.__folders = folders
@@ -286,6 +286,7 @@ class MyDistributedIterableDataset(IterableDataset):
         self.__prediction_step = args.prediction_step
         self.__data_type = data_type
         self.precompressed_landscape = precompressed_landscape
+        self.year_leap = year_leap
     def __iter__(self):
         """
         Yields:
@@ -327,7 +328,15 @@ class MyDistributedIterableDataset(IterableDataset):
 
             with h5py.File(file_path, 'r') as pop_map_h5:
                 for rep in self.__reps:
-                    for year in self.__years:
+                    start_year = self.__years[0] + rep%self.year_leap
+                    rep_years = list(range(start_year, self.__years[-1] + 1 - self.__prediction_step, self.year_leap))
+                    if rep%self.year_leap != 0:
+                        if rep%self.year_leap < self.year_leap//2:
+                            rep_years.append(self.__years[-1] - self.__prediction_step)
+                        else: 
+                            rep_years = [self.__years[0]] + rep_years
+                    for year in rep_years:
+                        print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}, year prediction step: {year +self.__prediction_step}")
                         key_now = f"rep_{rep}_year_{year}"
                         key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
                         if key_now in pop_map_h5 and key_future in pop_map_h5:
@@ -413,7 +422,7 @@ class MyDistributedIterableDataset(IterableDataset):
                 batch_prediction_data = []
 
         # Final partial batch
-        if batch_condition_data_pop:
+        if batch_condition_data_pop != []:
             batch = {}
             batch["condition_data_pop"] = torch.stack(batch_condition_data_pop)
             batch["condition_data_k"] = torch.stack(batch_condition_data_k)
@@ -446,14 +455,14 @@ def load_data(train_dataset, validation_dataset, test_dataset, file_path, normal
                 test_dataset.append(tensor_map.repeat(3,1,1))
 
 class MyDataModule(pl.LightningDataModule):
-    def __init__(self, args, train_folders, validation_folders, years, vae=None,data_type=torch.float32):
+    def __init__(self, args, train_folders, validation_folders, years,data_type=torch.float32,year_leap=1):
         super().__init__()
         self.args = args
         self.train_folders = train_folders
         self.validation_folders = validation_folders
         self.years = years
-        self.vae = vae
         self.data_type = data_type
+        self.year_leap = year_leap
 
     # def setup(self, stage):
     #     # ... data loading and preparation code ...
@@ -465,8 +474,8 @@ class MyDataModule(pl.LightningDataModule):
             folders=self.train_folders,
             reps=range(20),
             years=self.years,
-            # vae=self.vae
-            data_type=self.data_type
+            data_type=self.data_type,
+            year_leap=self.year_leap
         )
         return DataLoader(
             dataset,
@@ -480,8 +489,8 @@ class MyDataModule(pl.LightningDataModule):
             folders=self.validation_folders,
             reps=range(20),
             years=self.years,
-            data_type=self.data_type
-            # vae=self.vae
+            data_type=self.data_type,
+            year_leap=self.year_leap
         )
         return DataLoader(
             dataset,
@@ -495,8 +504,8 @@ class MyDataModule(pl.LightningDataModule):
             folders=self.validation_folders,
             reps= range(20),
             years=self.years,
-            data_type=self.data_type
-            # vae=self.vae
+            data_type=self.data_type,
+            year_leap=self.year_leap
         )
         return DataLoader(
             dataset,

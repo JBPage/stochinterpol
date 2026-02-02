@@ -50,6 +50,7 @@ if __name__ == '__main__':
         criterion='mse',
         data_type='float32',
         prediction_step=1,
+        overfit=False,
         trainer_strategy='ddp',
         lr_scheduler='plateau',  # 'constant', 'cosine', 'cosine_restart', 'plateau'
         mixed_precision=False,
@@ -110,6 +111,11 @@ if __name__ == '__main__':
         default=default_config.gradient_accumulation_steps,
         help="Nb of steps to accumulate gradients"
         )
+    parser.add_argument(
+        '--overfit',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.overfit
+    )
     parser.add_argument(
         "--prediction_step",
         type=int,
@@ -331,7 +337,8 @@ if __name__ == '__main__':
         args=args,
         train_folders=train_dataset_folder,
         validation_folders=validation_data_folder,
-        years=list_years,
+        years=range(10,51),
+        year_leap=min(5,args.prediction_step+1),
         data_type=data_type
         )
     
@@ -342,13 +349,13 @@ if __name__ == '__main__':
     #     print("Batch shapes:", cond.shape, pred.shape)
     #     break
 
-    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step)
-    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step)
-    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step)
+    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step) * 20
+    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * 20
+    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * 20
 
-    nb_batches_per_gpu_train = train_dataset_length//args.batch_size//torch.cuda.device_count()
-    nb_batches_per_gpu_validation = validation_dataset_length//args.batch_size//torch.cuda.device_count()
-    nb_batches_per_gpu_test = test_dataset_length//args.batch_size//torch.cuda.device_count()
+    nb_batches_per_gpu_train = int((train_dataset_length/args.batch_size)/torch.cuda.device_count())+1
+    nb_batches_per_gpu_validation = int((validation_dataset_length/args.batch_size)/torch.cuda.device_count())+1
+    nb_batches_per_gpu_test = int((test_dataset_length/args.batch_size)/torch.cuda.device_count())+1
 
     print(f"Train dataset length: {train_dataset_length}")
     print(f"Validation dataset length: {validation_dataset_length}")
@@ -368,6 +375,7 @@ if __name__ == '__main__':
             with_time_emb=False,
             convnext_mult=2,
             GroupNorm=True,
+            # film_cond_dim={'LandEncoder_channels':8, 'FiLM_vector_size':2048},
             )
 
     if os.getenv("CKPT_DIR") is None or os.getenv("CKPT_DIR") == "":     
@@ -459,8 +467,8 @@ if __name__ == '__main__':
         # enable_checkpointing=False,    # to reduce noise during profiling
         # profiler=profiler,
         # For training:
-        limit_train_batches=nb_batches_per_gpu_train,
-        limit_val_batches=nb_batches_per_gpu_validation,
+        limit_train_batches=1 if args.overfit else nb_batches_per_gpu_train,
+        limit_val_batches=0 if args.overfit else nb_batches_per_gpu_validation,
         limit_test_batches=nb_batches_per_gpu_test,
         logger=wandb_logger,
         callbacks=[

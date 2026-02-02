@@ -44,6 +44,7 @@ if __name__ == '__main__':
         data_shuffle=False,
         latent_diffusion=False,
         lr_start=1e-4,
+        overfit=False,
         epochs=50,
         gradient_accumulation_steps=1,
         dim_mults='(1, 2, 4, 8)',
@@ -59,8 +60,6 @@ if __name__ == '__main__':
         save_model_vae=False,
         num_channel=3,
         batch_size=8,
-        train_ratio=0.8,
-        validation_ratio=0.15,
         nb_of_simulation_folders_train=80,
         nb_of_simulation_folders_valid=100,
     )
@@ -124,6 +123,11 @@ if __name__ == '__main__':
         default=default_config.save_model,
         help="activate saving of the model"
         )
+    parser.add_argument(
+        '--overfit',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.overfit
+        )
     # parser.add_argument(
     #     '--lr_min', 
     #     type=float, 
@@ -185,16 +189,6 @@ if __name__ == '__main__':
         '--mixed_precision',
         action=argparse.BooleanOptionalAction,
         default=default_config.mixed_precision
-        )
-    parser.add_argument(
-        '--train_ratio',
-        type=float,
-        default=default_config.train_ratio
-        )
-    parser.add_argument(
-        '--validation_ratio',
-        type=float,
-        default=default_config.validation_ratio
         )
     parser.add_argument(
         '--ckpt_name',
@@ -262,8 +256,6 @@ if __name__ == '__main__':
         data_type = torch.float16
     elif args.data_type == 'float64':
         data_type = torch.float64
-    train_threshold = int(args.train_ratio * 20)
-    validation_threshold = int((args.train_ratio + args.validation_ratio) * 20)
     if args.latent_diffusion:
         nb_channels = 4
         input_dim = 128
@@ -272,10 +264,13 @@ if __name__ == '__main__':
         input_dim = 1024
     model_name = args.project_name + '_' + args.model_name + '_pred_{i}'.format(i=args.prediction_step) 
 
-
+    print(args.nb_of_simulation_folders_train, "train folders")
+    print(args.nb_of_simulation_folders_valid, "validation folders")
 
     train_dataset_folder = [os.path.join(os.getenv("DATA_DIR"), "landscape_{i}".format(i=i)) for i in range(1, args.nb_of_simulation_folders_train + 1)]
     validation_data_folder = [os.path.join(os.getenv("DATA_DIR"), "landscape_{i}".format(i=i)) for i in range(args.nb_of_simulation_folders_train + 1,args.nb_of_simulation_folders_train + args.nb_of_simulation_folders_valid + 1)]
+    # train_dataset_folder = [os.path.join(os.getenv("DATA_DIR"), "landscape_{i}".format(i=i)) for i in range(1, 3)]
+    # validation_data_folder = [os.path.join(os.getenv("DATA_DIR"), "landscape_{i}".format(i=i)) for i in range(3 + 1,6 + 1)]
     print("Train dataset folders:", train_dataset_folder)
     print("Validation dataset folders:", validation_data_folder)
     
@@ -345,9 +340,8 @@ if __name__ == '__main__':
         args=args,
         train_folders=train_dataset_folder,
         validation_folders=validation_data_folder,
-        train_threshold=train_threshold,
-        validation_threshold=validation_threshold,
-        years=list_years,
+        years=range(10,51),
+        year_leap=min(5,args.prediction_step+1),
         data_type=data_type
         )
     
@@ -358,13 +352,13 @@ if __name__ == '__main__':
     #     print("Batch shapes:", cond.shape, pred.shape)
     #     break
 
-    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step) * len(range(0, train_threshold))
-    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * len(range(train_threshold, validation_threshold))
-    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * len(range(validation_threshold, 20))
+    train_dataset_length = args.nb_of_simulation_folders_train * len(list_years_before_pred_step) * 20
+    validation_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * 20 
+    test_dataset_length = args.nb_of_simulation_folders_valid * len(list_years_before_pred_step) * 20
     
-    nb_batches_per_gpu_train = train_dataset_length//args.batch_size//torch.cuda.device_count()
-    nb_batches_per_gpu_validation = validation_dataset_length//args.batch_size//torch.cuda.device_count()
-    nb_batches_per_gpu_test = test_dataset_length//args.batch_size//torch.cuda.device_count()
+    nb_batches_per_gpu_train = int((train_dataset_length/args.batch_size)/torch.cuda.device_count())+1
+    nb_batches_per_gpu_validation = int((validation_dataset_length/args.batch_size)/torch.cuda.device_count())+1
+    nb_batches_per_gpu_test = int((test_dataset_length/args.batch_size)/torch.cuda.device_count())+1
 
     print(f"Train dataset length: {train_dataset_length}")
     print(f"Validation dataset length: {validation_dataset_length}")
@@ -471,13 +465,10 @@ if __name__ == '__main__':
         )
     trainer = Trainer(
         # For debugging purposes, you can uncomment the following lines:
-        limit_train_batches=1,         # profile only a few batches first
-        # limit_val_batches=1,
+        limit_train_batches=1 if args.overfit else nb_batches_per_gpu_train,         # profile only a few batches first
+        limit_val_batches=0 if args.overfit else nb_batches_per_gpu_validation,
         # enable_checkpointing=False,    # to reduce noise during profiling
         # profiler=profiler,
-        # For training:
-        # limit_train_batches=nb_batches_per_gpu_train,
-        # limit_val_batches=nb_batches_per_gpu_validation,
         limit_test_batches=nb_batches_per_gpu_test,
         logger=wandb_logger,
         callbacks=[
@@ -486,10 +477,10 @@ if __name__ == '__main__':
                 #    early_stopping
                    ],
         log_every_n_steps=1,
-        precision="bf16-mixed",#"32-true", #if args.mixed_precision else "16-mixed",
+        precision="32-true",#"bf16-mixed", #if args.mixed_precision else "16-mixed",
         strategy="ddp", #args.trainer_strategy,
         num_nodes=1,
-        gradient_clip_val=5.0, 
+        gradient_clip_val=0.0, #5.0
         gradient_clip_algorithm="norm",
         accelerator="gpu", 
         devices="auto",

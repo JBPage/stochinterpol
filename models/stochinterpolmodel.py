@@ -11,7 +11,7 @@ from torch.nn.functional import mse_loss
 import bitsandbytes as bnb
 from models.utils_files.nn_utils import *
 from models.denoiser_models.standard_unet import Unet
-from torch.optim.lr_scheduler import LambdaLR, SequentialLR, LinearLR, CosineAnnealingLR,ReduceLROnPlateau, CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import LambdaLR, SequentialLR, LinearLR, CosineAnnealingLR,ReduceLROnPlateau, CosineAnnealingWarmRestarts, ConstantLR
 from tqdm import tqdm
 
 class StochasticInterpolentModel(pl.LightningModule):
@@ -96,7 +96,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         """ x_cond_1 : condition to be concatenated with x at input
             x_cond_2 : condition to be passed to FiLM layers throughout the network
         """ 
-        return self.denoiser(x, time, x_cond_1, x_condfilm_1, x_condfilm_2)
+        return self.denoiser(x, time, x_cond_1, torch.cat((x_condfilm_1, x_condfilm_2), dim=1))
     
     def configure_optimizers(self):
         # optimizer = bnb.optim.Adam8bit(self.denoiser.parameters(), lr=self.lr[1]) 
@@ -113,8 +113,14 @@ class StochasticInterpolentModel(pl.LightningModule):
         # )
 
         if self.scheduler == "constant":
+            scheduler = ConstantLR(optimizer, factor=1, total_iters=1)
             # Trivial scheduler: LR stays fixed
-            lr_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+            return [optimizer], [{
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "monitor": "val_loss"   # must log this in validation_step
+            }]
+            # lr_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
 
         elif self.scheduler == "cosine":
             lr_scheduler = CosineAnnealingLR(
@@ -136,39 +142,38 @@ class StochasticInterpolentModel(pl.LightningModule):
                 optimizer=optimizer,
                 mode="min",
                 factor=0.5,
-                patience=5,
+                patience=10,
             )
             return [optimizer], [{
                 "scheduler": lr_scheduler,
                 "interval": "epoch",
-                "monitor": "train_loss"   # must log this in validation_step
+                "monitor": "val_loss"   # must log this in validation_step
             }]
 
         else:
             raise ValueError(f"Unknown scheduler {self.scheduler}")
 
-        # Combine warmup and cosine
-        scheduler = SequentialLR(
-            optimizer,
-            schedulers=[
-                # warmup_scheduler, 
-                lr_scheduler
-                ],
-            # milestones=[warmup_steps]
-        )
-        return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-
-    def on_after_backward(self):
+    def on_before_optimizer_step(self, optimizer):
+        # print("automatic_optimization =", self.automatic_optimization) #to check if gradient are zeroed
+        total_norm = torch.norm(
+                torch.stack([
+                    p.grad.detach().norm(2)
+                    for p in self.parameters()
+                    if p.grad is not None
+                ]),
+                2
+            )
+        self.log("grad_norm_step", total_norm, on_step=True, sync_dist=True)
         # Compute L2 norm of all gradients
-        total_norm = 0.0
-        for p in self.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.detach().data.norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm ** 0.5
+        # total_norm = 0.0
+        # for p in self.parameters():
+        #     if p.grad is not None:
+        #         param_norm = p.grad.detach().data.norm(2)
+        #         total_norm += param_norm.item() ** 2
+        # total_norm = total_norm ** 0.5
 
-        # Log to Lightning (and thus WandB)
-        self.log("grad_norm", total_norm, on_step=True,on_epoch=True, prog_bar=True, logger=True)
+        # # Log to Lightning (and thus WandB)
+        # self.log("grad_norm", total_norm, on_step=True,on_epoch=True, prog_bar=True, logger=True)
     def shared_step(self, batch, batch_idx, gamma_func=None):
         """
         z0: latent at time t
@@ -181,7 +186,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         condition_data_costhab = batch["condition_data_costhab"].to(self.device)
         prediction_data= batch["prediction_data"].to(self.device)
 
-        const = 1e-4
+        const = 0.0 #1e-4
         
         if gamma_func is None:
             gamma_func = lambda t: const * torch.sin(np.pi * t)
@@ -190,8 +195,8 @@ class StochasticInterpolentModel(pl.LightningModule):
         def s_prime(t):
             return const * np.pi * torch.cos(np.pi * t)
 
-        pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor
-        land_scaling_factor = self._external_models["vae_land"].config.scaling_factor
+        pop_scaling_factor = 1.0 #self._external_models["vae_pop"].config.scaling_factor
+        land_scaling_factor = 1.0 #self._external_models["vae_land"].config.scaling_factor
 
         if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
             self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
@@ -201,14 +206,15 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
-            x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
-            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
+            x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
             x_condfilm_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_condfilm_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_cond_1 = (x_condfilm_1, x_condfilm_2)
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
 
         # sample t ~ Uniform(0,1)
+        # torch.manual_seed(0) # for reproducibility
         batch_t = torch.rand(x.shape[0], device=x.device)
 
         # sample Gaussian noise
@@ -228,9 +234,13 @@ class StochasticInterpolentModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
-        lambda_eta = gamma_t.mean()**2
+        lambda_eta = 0.0 #gamma_t.mean()**2
 
-        L_b = self.train_criterion(b_pred, b_true)   
+        L_b = self.train_criterion(b_pred, b_true)         
+        assert torch.isfinite(L_b)
+        assert L_b.requires_grad                  
+        # self.log("y_hat_mean", b_pred.mean())
+        # self.log("y_mean", b_true.mean())
         L_nz = self.train_criterion(eta_pred, z)
         train_loss = L_b + lambda_eta * L_nz
         self.log("L_b", 
@@ -270,7 +280,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         return train_loss
     def validation_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
-        lambda_eta = gamma_t.mean()**2
+        lambda_eta = 1.0 #gamma_t.mean()**2
 
         Lb = self.validation_criterion(b_pred, b_true)   
         Ln = self.validation_criterion(eta_pred, z)
@@ -407,10 +417,10 @@ class UnetModel(pl.LightningModule):
         if self._external_models["vae"] is not None:
             self._external_models["vae"] = self._external_models["vae"].to(self.device, dtype=self.dtype)
     def forward(self, x_condpop=None, x_condland_1=None, x_condland_2=None):
-        return self.unet(x = x_condpop, x_cond_1 = (x_condland_1, x_condland_2))
+        return self.unet(x = x_condpop, x_cond_1 = (x_condland_1, x_condland_2), x_cond_2 = torch.cat((x_condland_1, x_condland_2), dim=1))
     
     def configure_optimizers(self):
-        # optimizer = bnb.optim.Adam8bit(self.denoiser.parameters(), lr=self.lr[1]) 
+        # optimizer = bnb.optim.Adam8bit(self.unet.parameters(), lr=self.lr[1]) 
         optimizer = torch.optim.AdamW(self.unet.parameters(), lr=self.lr)
         
         total_steps = (self.trainer.limit_train_batches * self.trainer.max_epochs) // self.trainer.accumulate_grad_batches
@@ -424,8 +434,14 @@ class UnetModel(pl.LightningModule):
         # )
 
         if self.scheduler == "constant":
+            scheduler = ConstantLR(optimizer, factor=1, total_iters=1)
             # Trivial scheduler: LR stays fixed
-            lr_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+            return [optimizer], [{
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "monitor": "val_loss"   # must log this in validation_step
+            }]
+            # lr_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
 
         elif self.scheduler == "cosine":
             lr_scheduler = CosineAnnealingLR(
@@ -447,28 +463,16 @@ class UnetModel(pl.LightningModule):
                 optimizer=optimizer,
                 mode="min",
                 factor=0.5,
-                patience=5,
+                patience=10,
             )
             return [optimizer], [{
                 "scheduler": lr_scheduler,
                 "interval": "epoch",
-                "monitor": "train_loss"   # must log this in validation_step
+                "monitor": "val_loss"   # must log this in validation_step
             }]
 
         else:
             raise ValueError(f"Unknown scheduler {self.scheduler}")
-
-        # Combine warmup and cosine
-        scheduler = SequentialLR(
-            optimizer,
-            schedulers=[
-                # warmup_scheduler, 
-                lr_scheduler
-                ],
-            # milestones=[warmup_steps]
-        )
-        return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-
     def on_after_backward(self):
         # Compute L2 norm of all gradients
         total_norm = 0.0
@@ -499,8 +503,8 @@ class UnetModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
-            x_condpop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
-            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample() * pop_scaling_factor
+            x_condpop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
             x_condland_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_condland_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
