@@ -281,7 +281,7 @@ class Unet_filmconcat_cond(nn.Module):
                     [
                         block_klass(dim_in, dim_out, time_emb_dim=time_dim),
                         block_klass(dim_out, dim_out, time_emb_dim=time_dim),
-                        # Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                        Residual(PreNorm(dim_out, LinearAttention(dim_out))),
                         Downsample(dim_out) if not is_last else nn.Identity(),
                     ]
                 )
@@ -289,7 +289,7 @@ class Unet_filmconcat_cond(nn.Module):
 
         mid_dim = dims[-1]
         self.mid_block1 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
-        # self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
+        self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
         self.mid_block2 = block_klass_film(mid_dim, mid_dim, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
@@ -298,11 +298,11 @@ class Unet_filmconcat_cond(nn.Module):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        # block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
-                        # block_klass_film(dim_in, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_in, dim_in, time_emb_dim=time_dim),
-                        block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
-                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
-                        # Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                        block_klass_film(dim_out * 2, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        block_klass_film(dim_in, dim_in, time_emb_dim=time_dim) if film_cond_dim['FiLM_vector_size'] is not None else block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        # block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        # block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Upsample(dim_in) if not is_last else nn.Identity(),
                     ]
                 )
@@ -330,24 +330,24 @@ class Unet_filmconcat_cond(nn.Module):
         h = []
 
         # downsample
-        for block1, block2, downsample in self.downs:
+        for block1, block2, attn, downsample in self.downs:
             x = block1(x, t)
             x = block2(x, t)
-            # x = attn(x)
+            x = attn(x)
             h.append(x)
             x = downsample(x)
 
         # bottleneck
         x = self.mid_block1(x, t, x_condfilm) if self.film_cond_dim is not None else self.mid_block1(x, t)
-        # x = self.mid_attn(x)
+        x = self.mid_attn(x)
         x = self.mid_block2(x, t, x_condfilm) if self.film_cond_dim is not None else self.mid_block2(x, t)
 
         # upsample
-        for block1, block2, upsample in self.ups:
+        for block1, block2, attn, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
             x = block1(x, t, x_condfilm) if self.film_cond_dim is not None else block1(x, t)
             x = block2(x, t, x_condfilm) if self.film_cond_dim is not None else block2(x, t)
-            # x = attn(x)
+            x = attn(x)
             x = upsample(x)
 
         return self.final_conv_b(x), self.final_conv_eta(x)

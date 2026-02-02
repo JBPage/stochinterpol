@@ -44,6 +44,8 @@ if __name__ == '__main__':
         data_shuffle=False,
         latent_diffusion=False,
         lr_start=1e-4,
+        stoch_interpol_noise_scale=0.0,
+        lambda_eta=1e-4,
         overfit=False,
         epochs=50,
         gradient_accumulation_steps=1,
@@ -106,6 +108,18 @@ if __name__ == '__main__':
         default=default_config.epochs 
         )
     parser.add_argument(
+        '--stoch_interpol_noise_scale',
+        type=float,
+        default=default_config.stoch_interpol_noise_scale,
+        help="Scale of the stochastic interpolation noise"
+        )
+    parser.add_argument(
+        '--lambda_eta',
+        type=float,
+        default=default_config.lambda_eta,
+        help="Factor for the eta loss term in the train loss"
+        )
+    parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
         default=default_config.gradient_accumulation_steps,
@@ -155,6 +169,7 @@ if __name__ == '__main__':
         default=default_config.criterion,
         choices=['mse', 'l1']
         )
+    
     parser.add_argument(
         '--batch_size', 
         type=int, 
@@ -185,6 +200,7 @@ if __name__ == '__main__':
         action=argparse.BooleanOptionalAction,
         default=default_config.latent_diffusion
         )
+    
     parser.add_argument(
         '--mixed_precision',
         action=argparse.BooleanOptionalAction,
@@ -497,6 +513,8 @@ if __name__ == '__main__':
         vae_pop=vae_pop if args.latent_diffusion else None,
         vae_land=vae_land if args.latent_diffusion else None,
         scheduler=args.lr_scheduler,
+        lambda_eta=args.lambda_eta,
+        noise_scale=args.stoch_interpol_noise_scale,
         )
 
     if wandb_logger is not None:

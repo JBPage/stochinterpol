@@ -29,6 +29,8 @@ class StochasticInterpolentModel(pl.LightningModule):
                  save_vae=False,
                  scheduler='plateau',
                  clipping_factor=1, # for the clipping technique in q_sample
+                 lambda_eta=None,
+                 noise_scale=0,
                  ):
         super().__init__()
 
@@ -49,7 +51,9 @@ class StochasticInterpolentModel(pl.LightningModule):
                 convnext_mult=2,
             )
             print("Created standard Unet as denoiser model")
-        self.denoiser = denoiser        
+        self.denoiser = denoiser
+        self.lambda_eta = lambda_eta
+        self.noise_scale = noise_scale        
         self._external_models = {"vae":None} # to store external models like VAE so they are not considered as parameters of this model
         if vae_pop is not None:
             self._external_models["vae_pop"] = vae_pop
@@ -186,7 +190,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         condition_data_costhab = batch["condition_data_costhab"].to(self.device)
         prediction_data= batch["prediction_data"].to(self.device)
 
-        const = 0.0 #1e-4
+        const = self.noise_scale #1e-4
         
         if gamma_func is None:
             gamma_func = lambda t: const * torch.sin(np.pi * t)
@@ -234,7 +238,8 @@ class StochasticInterpolentModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
-        lambda_eta = 0.0 #gamma_t.mean()**2
+        
+        lambda_eta = gamma_t.mean()**2 if self.lambda_eta is None else self.lambda_eta
 
         L_b = self.train_criterion(b_pred, b_true)         
         assert torch.isfinite(L_b)
