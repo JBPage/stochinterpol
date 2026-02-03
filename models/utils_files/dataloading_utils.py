@@ -307,7 +307,7 @@ class MyDistributedIterableDataset(IterableDataset):
         global_worker_id = rank * num_workers + worker_id
         global_num_workers = world_size * num_workers
 
-        print(f"[Rank {rank} Worker {worker_id}] Starting iteration with {len(self.__folders)} folders")
+        # print(f"[Rank {rank} Worker {worker_id}] Starting iteration with {len(self.__folders)} folders")
 
         # Pre-collect all rep-year pairs (with associated static maps)
         all_pairs = []
@@ -481,7 +481,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=False,
+            pin_memory=True,
         )
     def val_dataloader(self):
         dataset = MyDistributedIterableDataset(
@@ -496,7 +496,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=False,
+            pin_memory=True,
         )
     def test_dataloader(self):
         dataset = MyDistributedIterableDataset(
@@ -511,7 +511,7 @@ class MyDataModule(pl.LightningDataModule):
             dataset,
             batch_size=None,  # Important for IterableDataset
             num_workers=self.args.cpus,
-            pin_memory=False,
+            pin_memory=True,
         )
     
 @rank_zero_only

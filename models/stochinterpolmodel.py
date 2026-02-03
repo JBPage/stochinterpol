@@ -287,7 +287,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         return train_loss
     def validation_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
-        lambda_eta = 1.0 #gamma_t.mean()**2
+        lambda_eta = gamma_t.mean()**2 if self.lambda_eta is None else self.lambda_eta
 
         Lb = self.validation_criterion(b_pred, b_true)   
         Ln = self.validation_criterion(eta_pred, z)
