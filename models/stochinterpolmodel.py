@@ -184,7 +184,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         z1: latent at time t+1
         cond: conditioning tuple for model (e.g. landscape latents)
         """
-        print(torch.cuda.memory_summary(device=None, abbreviated=False))  # Affiche l'état de la mémoire
+        # print(torch.cuda.memory_summary(device=None, abbreviated=False))  # Affiche l'état de la mémoire
         # condition_data_pop, condition_data_landscape, prediction_data = (x.to(self.device) for x in batch)
         condition_data_pop = batch["condition_data_pop"].to(self.device)
         condition_data_k = batch["condition_data_k"].to(self.device)
@@ -204,8 +204,9 @@ class StochasticInterpolentModel(pl.LightningModule):
         land_scaling_factor = 1.0 #self._external_models["vae_land"].config.scaling_factor
 
         if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
-            self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
-            self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
+            self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device).eval()
+            self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device).eval()
+
             # print("1:Moved VAE models to device:", self._external_models["vae_pop"].device)
             # print("1:Moved VAE landscape model to device:", self._external_models["vae_land"].device)
 
@@ -283,7 +284,6 @@ class StochasticInterpolentModel(pl.LightningModule):
                  on_epoch=True,
                  logger=True
                  )
-        torch.cuda.empty_cache()
         return train_loss
     def validation_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
