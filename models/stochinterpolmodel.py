@@ -184,6 +184,7 @@ class StochasticInterpolentModel(pl.LightningModule):
         z1: latent at time t+1
         cond: conditioning tuple for model (e.g. landscape latents)
         """
+        print(torch.cuda.memory_summary(device=None, abbreviated=False))  # Affiche l'état de la mémoire
         # condition_data_pop, condition_data_landscape, prediction_data = (x.to(self.device) for x in batch)
         condition_data_pop = batch["condition_data_pop"].to(self.device)
         condition_data_k = batch["condition_data_k"].to(self.device)
@@ -282,6 +283,7 @@ class StochasticInterpolentModel(pl.LightningModule):
                  on_epoch=True,
                  logger=True
                  )
+        torch.cuda.empty_cache()
         return train_loss
     def validation_step(self, batch, batch_idx):
         (b_pred, b_true), (eta_pred, z), gamma_t = self.shared_step(batch, batch_idx)
