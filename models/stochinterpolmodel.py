@@ -146,7 +146,7 @@ class StochasticInterpolentModel(pl.LightningModule):
                 optimizer=optimizer,
                 mode="min",
                 factor=0.5,
-                patience=10,
+                patience=5,
             )
             return [optimizer], [{
                 "scheduler": lr_scheduler,
@@ -200,8 +200,8 @@ class StochasticInterpolentModel(pl.LightningModule):
         def s_prime(t):
             return const * np.pi * torch.cos(np.pi * t)
 
-        pop_scaling_factor = 1.0 #self._external_models["vae_pop"].config.scaling_factor
-        land_scaling_factor = 1.0 #self._external_models["vae_land"].config.scaling_factor
+        pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor
+        land_scaling_factor = self._external_models["vae_land"].config.scaling_factor
 
         if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
             self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device).eval()
@@ -212,8 +212,8 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
-            x_cond_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
-            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            condition_data_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            prediction_data = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
             x_condfilm_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_condfilm_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_cond_1 = (x_condfilm_1, x_condfilm_2)
@@ -221,19 +221,18 @@ class StochasticInterpolentModel(pl.LightningModule):
 
         # sample t ~ Uniform(0,1)
         # torch.manual_seed(0) # for reproducibility
-        batch_t = torch.rand(x.shape[0], device=x.device)
+        batch_t = torch.rand(prediction_data.shape[0], device=prediction_data.device)
 
         # sample Gaussian noise
-        z = torch.randn_like(x).to(self.device)
+        z = torch.randn_like(prediction_data).to(self.device)
 
         # build x(t) = linear interpolant + noise
         gamma_t = gamma_func(batch_t)[:, None, None, None]
-        x_t = (1 - batch_t)[:, None, None, None] * x_cond_pop \
-            + batch_t[:, None, None, None] * x \
+        x_t = (1 - batch_t)[:, None, None, None] * condition_data_pop \
+            + batch_t[:, None, None, None] * prediction_data \
             + gamma_t * z
 
-        b_true = (x - x_cond_pop) + s_prime(batch_t)[:, None, None, None] * z # true velocity from paper notation
-
+        b_true = (prediction_data - condition_data_pop) + s_prime(batch_t)[:, None, None, None] * z # true velocity from paper notation
         b_pred, eta_pred = self.forward(x_t, batch_t, x_cond_1, x_condfilm_1, x_condfilm_2)
 
         return (b_pred, b_true), (eta_pred, z), gamma_t
@@ -470,7 +469,7 @@ class UnetModel(pl.LightningModule):
                 optimizer=optimizer,
                 mode="min",
                 factor=0.5,
-                patience=10,
+                patience=5,
             )
             return [optimizer], [{
                 "scheduler": lr_scheduler,
@@ -510,15 +509,15 @@ class UnetModel(pl.LightningModule):
 
         ## Encode condition and prediction data with VAEs
         with torch.no_grad():
-            x_condpop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
-            x = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            condition_data_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
+            prediction_data = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor
             x_condland_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             x_condland_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
             # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
 
-        x_pred = self.forward(x_condpop, x_condland_1, x_condland_2)
+        x_pred = self.forward(condition_data_pop, x_condland_1, x_condland_2)
 
-        return x_pred, x
+        return x_pred, prediction_data
 
     def training_step(self, batch, batch_idx):
         x_pred, x_true = self.shared_step(batch, batch_idx)
