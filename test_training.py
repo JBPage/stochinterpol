@@ -24,24 +24,49 @@ from torch.serialization import add_safe_globals
 from datetime import date
 
 add_safe_globals([functools.partial])
+from torch.utils.data import DataLoader, Dataset
 
+class RandomDictDataset(Dataset):
+    def __init__(self, num_samples, batch_size):
+        self.num_samples = num_samples
+        self.batch_size = batch_size
 
-class RandomTensorDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=4, num_workers=4):
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        # Retourne un dictionnaire avec des tenseurs aléatoires
+        return {
+            "condition_data_pop": torch.rand(3, 1024, 1024),
+            "condition_data_k": torch.rand(3, 1024, 1024),
+            "condition_data_costhab": torch.rand(3, 1024, 1024),
+            "prediction_data": torch.rand(3, 1024, 1024),
+        }
+
+class RandomDictDataModule(pl.LightningDataModule):
+    def __init__(self, batch_size=4, num_samples_train=100, num_samples_val=20, num_samples_test=20, num_workers=4):
         super().__init__()
         self.batch_size = batch_size
+        self.num_samples_train = num_samples_train
+        self.num_samples_val = num_samples_val
+        self.num_samples_test = num_samples_test
         self.num_workers = num_workers
 
     def setup(self, stage=None):
-        # Générer des tensors aléatoires pour le training, la validation et le test
-        train_data = torch.rand(self.batch_size * 100, 3, 1024, 1024)  # 100 batches de données aléatoires
-        val_data = torch.rand(self.batch_size * 20, 3, 1024, 1024)    # 20 batches de données aléatoires
-        test_data = torch.rand(self.batch_size * 20, 3, 1024, 1024)   # 20 batches de données aléatoires
+        # Initialiser les datasets
+        self.train_dataset = RandomDictDataset(self.num_samples_train, self.batch_size)
+        self.val_dataset = RandomDictDataset(self.num_samples_val, self.batch_size)
+        self.test_dataset = RandomDictDataset(self.num_samples_test, self.batch_size)
 
-        # Créer des TensorDatasets
-        self.train_dataset = TensorDataset(train_data)
-        self.val_dataset = TensorDataset(val_data)
-        self.test_dataset = TensorDataset(test_data)
+    def collate_fn(self, batch):
+        # Fonction pour combiner les échantillons en un batch
+        result = {
+            "condition_data_pop": torch.stack([item["condition_data_pop"] for item in batch], dim=0),
+            "condition_data_k": torch.stack([item["condition_data_k"] for item in batch], dim=0),
+            "condition_data_costhab": torch.stack([item["condition_data_costhab"] for item in batch], dim=0),
+            "prediction_data": torch.stack([item["prediction_data"] for item in batch], dim=0),
+        }
+        return result
 
     def train_dataloader(self):
         return DataLoader(
@@ -49,6 +74,7 @@ class RandomTensorDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
             pin_memory=True
         )
 
@@ -58,6 +84,7 @@ class RandomTensorDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
             pin_memory=True
         )
 
@@ -67,6 +94,7 @@ class RandomTensorDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
             pin_memory=True
         )
 
@@ -98,7 +126,7 @@ if __name__ == '__main__':
             torch_dtype=torch.float32
             )
 
-    random_data_module = RandomTensorDataModule(batch_size=batch_size, num_workers=0)
+    random_data_module = RandomDictDataModule(batch_size=batch_size)
     
 
     unet = Unet_filmconcat_cond(
