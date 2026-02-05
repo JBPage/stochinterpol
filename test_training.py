@@ -38,8 +38,8 @@ class RandomDictDataset(Dataset):
         # Retourne un dictionnaire avec des tenseurs aléatoires
         return {
             "condition_data_pop": torch.rand(3, 1024, 1024),
-            "condition_data_k": torch.rand(3, 1024, 1024),
-            "condition_data_costhab": torch.rand(3, 1024, 1024),
+            "condition_data_k": torch.rand(4, 128, 128), # précompressés donc plus petits
+            "condition_data_costhab": torch.rand(4, 128, 128), # précompressés donc plus petits
             "prediction_data": torch.rand(3, 1024, 1024),
         }
 
