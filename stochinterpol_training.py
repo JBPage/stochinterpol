@@ -493,7 +493,7 @@ if __name__ == '__main__':
                 #    early_stopping
                    ],
         log_every_n_steps=1,
-        precision="32-true",#"bf16-mixed", #if args.mixed_precision else "16-mixed",
+        precision="bf16-mixed",#"32-true", #if args.mixed_precision else "16-mixed",
         strategy="ddp", #args.trainer_strategy,
         num_nodes=1,
         gradient_clip_val=0.0, #5.0
