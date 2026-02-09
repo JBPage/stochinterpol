@@ -19,7 +19,17 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from pytorch_lightning import Callback
 
 
-
+def rotate_tensor(tensor, angle='0'):
+    if angle == '0':
+        return tensor
+    elif angle == 'pi/2':
+        return torch.rot90(tensor, k=1, dims=(-2, -1))
+    elif angle == 'pi':
+        return torch.rot90(tensor, k=2, dims=(-2, -1))
+    elif angle == '-pi/2':
+        return torch.rot90(tensor, k=3, dims=(-2, -1))
+    else:
+        raise ValueError(f"Invalid angle: {angle}")
 
 transform = transforms.Compose([transforms.ToTensor()])
 def pad(x,value=0): 
@@ -315,19 +325,18 @@ class MyDistributedIterableDataset(IterableDataset):
             parameters_path = os.path.join(folder, "Inputs")
             k_map, costhab_map = extract_map_parameters(parameters_path)
             if self.precompressed_landscape:
-                cond_k = torch.load(os.path.join(parameters_path, "k_latent_tensor.pt"))[0]
-                cond_costhab = torch.load(os.path.join(parameters_path, "costhab_latent_tensor.pt"))[0]
-            else:
-                k_map_norm = k_map / (torch.amax(k_map, dim=(-2, -1), keepdim=True) + 1e-8)
-                costhab_map_norm = costhab_map / (torch.amax(costhab_map, dim=(-2, -1), keepdim=True) + 1e-8)
-                cond_k = pad(k_map_norm[None]).repeat(3, 1, 1).type(self.__data_type)
-                cond_costhab = pad(costhab_map_norm[None]).repeat(3, 1, 1).type(self.__data_type)
+                # cond_k = torch.load(os.path.join(parameters_path, "k_latent_tensor.pt"))[0]
+                # cond_costhab = torch.load(os.path.join(parameters_path, "costhab_latent_tensor.pt"))[0]
+                latent_tensors = torch.load(os.path.join(parameters_path, "latent_tensors.pt"))
             file_path = os.path.join(folder, "Output_Maps", "Population_maps.h5")
             if not os.path.exists(file_path):
                 continue
 
             with h5py.File(file_path, 'r') as pop_map_h5:
+                angles = ['0', 'pi/2', 'pi', '-pi/2']
                 for rep in self.__reps:
+                    if self.precompressed_landscape:
+                        angle = random.choice(angles)
                     start_year = self.__years[0] + rep%self.year_leap
                     rep_years = list(range(start_year, self.__years[-1] + 1 - self.__prediction_step, self.year_leap))
                     if rep%self.year_leap != 0:
@@ -340,7 +349,7 @@ class MyDistributedIterableDataset(IterableDataset):
                         key_now = f"rep_{rep}_year_{year}"
                         key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
                         if key_now in pop_map_h5 and key_future in pop_map_h5:
-                            all_pairs.append((folder, k_map, costhab_map, rep, year))
+                            all_pairs.append((folder, k_map, costhab_map, rep, year, angle if self.precompressed_landscape else None))
 
         # Shuffle and split across all workers
         if self.__args.data_shuffle:
@@ -353,8 +362,8 @@ class MyDistributedIterableDataset(IterableDataset):
         batch_condition_data_costhab = []
         batch_prediction_data = []
 
-        for folder, k_map, costhab_map, rep, year in all_pairs:
-            # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}")
+        for folder, k_map, costhab_map, rep, year, angle in all_pairs:
+            # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}", flush=True)
             file_path = os.path.join(folder, "Output_Maps", "Population_maps.h5")
             if not os.path.exists(file_path):
                 print(f"[Rank {rank} Worker {worker_id}] File {file_path} does not exist, skipping")
@@ -376,7 +385,12 @@ class MyDistributedIterableDataset(IterableDataset):
                 map_now = map_now / (torch.amax(map_now, dim=(-2, -1), keepdim=True) + 1e-8)
                 map_future = map_future / (torch.amax(map_future, dim=(-2, -1), keepdim=True) + 1e-8)
                 delta_map = delta_map / (torch.amax(delta_map, dim=(-2, -1), keepdim=True) + 1e-8)
-    
+            if self.precompressed_landscape:
+                k_map = rotate_tensor(pad(k_map[None]), angle)
+                costhab_map = rotate_tensor(pad(costhab_map[None]), angle)
+                map_now = rotate_tensor(pad(map_now), angle)
+                map_future = rotate_tensor(pad(map_future), angle)
+                # delta_map = rotate_tensor(delta_map, angle)
             # Prepare input tensors
             # cond_pop = pad(map_now).repeat(1, 3, 1, 1)
             # cond_land = torch.cat([
@@ -389,15 +403,28 @@ class MyDistributedIterableDataset(IterableDataset):
             # pred = pad(map_future).repeat(1, 3, 1, 1)
 
             # cond_pop = map_to_tensor(pad(map_now)).type(self.__data_type)
-            map_now_norm_k =  pad(torch.where(k_map != 0,  map_now/k_map.unsqueeze(0), torch.zeros_like(map_now))).repeat(3, 1, 1).type(self.__data_type)
+            # print('map now shape:', map_now.shape,flush=True)
+            # print('k map shape:', k_map.shape, flush=True)
+            # print("Avant la ligne problématique")
+            map_now_norm_k =  torch.where(k_map!= 0,  map_now/k_map, torch.zeros_like(map_now)).repeat(3, 1, 1).type(self.__data_type)
             threshold = 0.01
             cond_pop = torch.where(map_now_norm_k > threshold, torch.ones_like(map_now_norm_k)*threshold, map_now_norm_k)*(1/threshold)
 
-            map_future_norm_k =  pad(torch.where(k_map != 0,  map_future/k_map.unsqueeze(0), torch.zeros_like(map_future))).repeat(3, 1, 1).type(self.__data_type)
+            map_future_norm_k =  torch.where(k_map != 0,  map_future/k_map, torch.zeros_like(map_future)).repeat(3, 1, 1).type(self.__data_type)
             pred = torch.where(map_future_norm_k > threshold, torch.ones_like(map_future_norm_k)*threshold, map_future_norm_k)*(1/threshold)
             # pred = map_to_tensor(pad(delta_map)).type(self.__data_type)
             # pred = map_to_tensor(pad(map_future)).type(self.__data_type)
-
+            if self.precompressed_landscape:
+                cond_k_key = f"cond_k_latent_{angle}"
+                cond_costhab_key = f"cond_costhab_latent_{angle}"
+                cond_k = latent_tensors[cond_k_key]
+                cond_costhab = latent_tensors[cond_costhab_key]
+            else:
+                k_map_norm = k_map / (torch.amax(k_map, dim=(-2, -1), keepdim=True) + 1e-8)
+                costhab_map_norm = costhab_map / (torch.amax(costhab_map, dim=(-2, -1), keepdim=True) + 1e-8)
+                cond_k = k_map_norm.repeat(3, 1, 1).type(self.__data_type)
+                cond_costhab = costhab_map_norm.repeat(3, 1, 1).type(self.__data_type)
+                
             batch_condition_data_pop.append(cond_pop)
             batch_condition_data_k.append(cond_k)
             batch_condition_data_costhab.append(cond_costhab)

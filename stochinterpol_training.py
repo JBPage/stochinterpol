@@ -54,7 +54,7 @@ if __name__ == '__main__':
         data_type='float32',
         prediction_step=1,
         trainer_strategy='ddp',
-        lr_scheduler='plateau',  # 'constant', 'cosine', 'cosine_restart', 'plateau'
+        lr_scheduler=('plateau', 5),  # 'constant', 'cosine', 'cosine_restart', 'plateau'
         mixed_precision=False,
         weights_only=False,
         gpus=1,
@@ -232,7 +232,7 @@ if __name__ == '__main__':
         '--lr_scheduler', 
         type=str, 
         default=default_config.lr_scheduler,
-        choices=['constant', 'cosine', 'cosine_restart', 'plateau'],
+        # choices=['constant', 'cosine', 'cosine_restart', 'plateau'],
         )
     parser.add_argument(
         '--nb_of_simulation_folders_train', 

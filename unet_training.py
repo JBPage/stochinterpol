@@ -230,14 +230,18 @@ if __name__ == '__main__':
         )
     args = parser.parse_args()
     before_memory = torch.cuda.memory_allocated()
-
+    print('weights only:', args.weights_only)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print("Using device:", device, torch.cuda.get_device_name() if torch.cuda.is_available() else "")
-    if device == 'cuda':
-        if "A100" in torch.cuda.get_device_name().split('-'):
-            print("Running on A100")
-            torch.set_float32_matmul_precision('high')  # Enable Tensor Core acceleration
-    print("A100" in torch.cuda.get_device_name() if torch.cuda.is_available() else "")
+    # Vérifie si CUDA est disponible
+    if torch.cuda.is_available():
+        # Obtenir l'index du GPU utilisé par le modèle
+        current_device_index = device.index
+
+        # Obtenir le nom du GPU
+        gpu_name = torch.cuda.get_device_name(current_device_index)
+        print(f"Le code tourne sur le GPU: {gpu_name} (index: {current_device_index})")
+    else:
+        print("CUDA n'est pas disponible.")    
     print(torch.get_float32_matmul_precision())
 
     print("Running training with prediction_step =", args.prediction_step)
@@ -460,6 +464,7 @@ if __name__ == '__main__':
             record_shapes=True,
             profile_memory=True,
         )
+    
     trainer = Trainer(
         # For debugging purposes, you can uncomment the following lines:
         # limit_train_batches=1,         # profile only a few batches first
@@ -480,7 +485,7 @@ if __name__ == '__main__':
         precision="bf16-mixed",#"32-true", #if args.mixed_precision else "16-mixed",
         strategy="ddp", #args.trainer_strategy,
         num_nodes=1,
-        gradient_clip_val=5.0, 
+        gradient_clip_val=10.0, 
         gradient_clip_algorithm="norm",
         accelerator="gpu", 
         devices="auto",
@@ -496,18 +501,19 @@ if __name__ == '__main__':
         save_vae=args.save_model_vae,
         vae_pop=vae_pop if args.latent_diffusion else None,
         vae_land=vae_land if args.latent_diffusion else None,
-        scheduler=args.lr_scheduler,
+        scheduler=ast.literal_eval(args.lr_scheduler),
         )
+
+    if ckpt_path is not None and args.weights_only:
+        print("Loading weights only from checkpoint:", ckpt_path)
+        checkpoint = torch.load(ckpt_path, weights_only=False, map_location='cpu')
+        model.load_state_dict(checkpoint['state_dict'],strict=False)
+        ckpt_path = None  # To avoid loading the full checkpoint again in trainer.fit()
 
     if wandb_logger is not None:
         wandb_logger.watch(model, log="all", log_freq=100)
         log_wandb_config(wandb_logger, args)
 
-    if ckpt_path is not None and args.weights_only:
-        print("Loading weights only from checkpoint:", ckpt_path)
-        checkpoint = torch.load(ckpt_path, weights_only=False, map_location='cpu')
-        model.load_state_dict(checkpoint['state_dict'])
-        ckpt_path = None  # To avoid loading the full checkpoint again in trainer.fit()
 
     if args.run_mode == 'train':
         print("Starting training...")
@@ -515,6 +521,7 @@ if __name__ == '__main__':
             model=model,
             datamodule=data_module,
             ckpt_path=ckpt_path,
+            weights_only=False,
         )
     elif args.run_mode == 'validate':
         print("Starting validation...")
