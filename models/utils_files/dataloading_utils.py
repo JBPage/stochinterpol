@@ -287,7 +287,7 @@ class MyDataset(torch.utils.data.Dataset):
         return cond_pop, cond_land, pred
     
 class MyDistributedIterableDataset(IterableDataset):
-    def __init__(self, args, folders, reps=range(20), years=range(10,51),data_type=torch.float32, precompressed_landscape=True, year_leap=1):
+    def __init__(self, args, folders, reps=range(20), years=range(10,51),data_type=torch.float32, precompressed_data=True, year_leap=1):
         super().__init__()
         self.__args = args
         self.__folders = folders
@@ -295,7 +295,7 @@ class MyDistributedIterableDataset(IterableDataset):
         self.__years = list(years)
         self.__prediction_step = args.prediction_step
         self.__data_type = data_type
-        self.precompressed_landscape = precompressed_landscape
+        self.precompressed_data = precompressed_data
         self.year_leap = year_leap
     def __iter__(self):
         """
@@ -323,33 +323,33 @@ class MyDistributedIterableDataset(IterableDataset):
         all_pairs = []
         for folder in self.__folders:
             parameters_path = os.path.join(folder, "Inputs")
-            k_map, costhab_map = extract_map_parameters(parameters_path)
-            if self.precompressed_landscape:
-                # cond_k = torch.load(os.path.join(parameters_path, "k_latent_tensor.pt"))[0]
-                # cond_costhab = torch.load(os.path.join(parameters_path, "costhab_latent_tensor.pt"))[0]
+            angles = ['0', 'pi/2', 'pi', '-pi/2']
+            if self.precompressed_data:
                 latent_tensors = torch.load(os.path.join(parameters_path, "latent_tensors.pt"))
-            file_path = os.path.join(folder, "Output_Maps", "Population_maps.h5")
-            if not os.path.exists(file_path):
-                continue
-
-            with h5py.File(file_path, 'r') as pop_map_h5:
-                angles = ['0', 'pi/2', 'pi', '-pi/2']
-                for rep in self.__reps:
-                    if self.precompressed_landscape:
-                        angle = random.choice(angles)
-                    start_year = self.__years[0] + rep%self.year_leap
-                    rep_years = list(range(start_year, self.__years[-1] + 1 - self.__prediction_step, self.year_leap))
-                    if rep%self.year_leap != 0:
-                        if rep%self.year_leap < self.year_leap//2:
-                            rep_years.append(self.__years[-1] - self.__prediction_step)
-                        else: 
-                            rep_years = [self.__years[0]] + rep_years
-                    for year in rep_years:
-                        # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}, year prediction step: {year +self.__prediction_step}")
-                        key_now = f"rep_{rep}_year_{year}"
-                        key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
-                        if key_now in pop_map_h5 and key_future in pop_map_h5:
-                            all_pairs.append((folder, k_map, costhab_map, rep, year, angle if self.precompressed_landscape else None))
+            else:
+                k_map, costhab_map = extract_map_parameters(parameters_path)            
+            
+            for rep in self.__reps:
+                angle = random.choice(angles)
+                start_year = self.__years[0] + rep%self.year_leap
+                rep_years = list(range(start_year, self.__years[-1] + 1 - self.__prediction_step, self.year_leap))
+                if self.precompressed_data:
+                    k_map = latent_tensors[f'cond_k_latent_{angle}']
+                    costhab_map = latent_tensors[f'cond_k_latent_{angle}']
+                else:
+                    k_map = rotate_tensor(pad(k_map[None]), angle)
+                    costhab_map = rotate_tensor(pad(costhab_map[None]), angle)
+                if rep%self.year_leap != 0:
+                    if rep%self.year_leap < self.year_leap//2:
+                        rep_years.append(self.__years[-1] - self.__prediction_step)
+                    else: 
+                        rep_years = [self.__years[0]] + rep_years
+                for year in rep_years:
+                    # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}, year prediction step: {year +self.__prediction_step}")
+                    key_now = f"rep_{rep}_year_{year}"
+                    key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
+                    # if key_now in pop_map_h5 and key_future in pop_map_h5:
+                    all_pairs.append((folder, k_map, costhab_map, rep, year, angle))
 
         # Shuffle and split across all workers
         if self.__args.data_shuffle:
@@ -363,34 +363,53 @@ class MyDistributedIterableDataset(IterableDataset):
         batch_prediction_data = []
 
         for folder, k_map, costhab_map, rep, year, angle in all_pairs:
+            if self.precompressed_data: #all files have been prepared, no further preprocessing
+                file_path = os.path.join(folder, "Output_Maps", "Population_maps_latent.pt") 
+                if not os.path.exists(file_path):
+                    print(f"[Rank {rank} Worker {worker_id}] File {file_path} does not exist, skipping")
+                    continue   
+                file = torch.load(file_path)
+                cond_pop = file[f"rep_{rep}_year_{year}_angle_{angle}"]
+                pred = file[f"rep_{rep}_year_{year + self.__prediction_step}_angle_{angle}"]
+                cond_k = k_map
+                cond_costhab = costhab_map
             # print(f"[Rank {rank} Worker {worker_id}] Processing folder: {folder}, rep: {rep}, year: {year}", flush=True)
-            file_path = os.path.join(folder, "Output_Maps", "Population_maps.h5")
-            if not os.path.exists(file_path):
-                print(f"[Rank {rank} Worker {worker_id}] File {file_path} does not exist, skipping")
-                continue
-
-            with h5py.File(file_path, 'r') as pop_map_h5:
-                key_now = f"rep_{rep}_year_{year}"
-                key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
-                if key_now not in pop_map_h5 or key_future not in pop_map_h5:
+            else:
+                file_path = os.path.join(folder, "Output_Maps", "Population_maps.h5")
+                if not os.path.exists(file_path):
+                    print(f"[Rank {rank} Worker {worker_id}] File {file_path} does not exist, skipping")
                     continue
+                with h5py.File(file_path, 'r') as pop_map_h5:
+                    key_now = f"rep_{rep}_year_{year}"
+                    key_future = f"rep_{rep}_year_{year + self.__prediction_step}"
+                    if key_now not in pop_map_h5 or key_future not in pop_map_h5:
+                        continue
 
-                # Load maps
-                map_now = torch.flip(transform(pop_map_h5[key_now][()]), [0, 1])
-                map_future = torch.flip(transform(pop_map_h5[key_future][()]), [0, 1])
-                delta_map = map_future - map_now
-            
-            # Normalize if required
-            if self.__args.normalize:
-                map_now = map_now / (torch.amax(map_now, dim=(-2, -1), keepdim=True) + 1e-8)
-                map_future = map_future / (torch.amax(map_future, dim=(-2, -1), keepdim=True) + 1e-8)
-                delta_map = delta_map / (torch.amax(delta_map, dim=(-2, -1), keepdim=True) + 1e-8)
-            if self.precompressed_landscape:
-                k_map = rotate_tensor(pad(k_map[None]), angle)
-                costhab_map = rotate_tensor(pad(costhab_map[None]), angle)
+                    # Load maps
+                    map_now = torch.flip(transform(pop_map_h5[key_now][()]), [0, 1])
+                    map_future = torch.flip(transform(pop_map_h5[key_future][()]), [0, 1])
+                # Rotate them like the landscape maps
                 map_now = rotate_tensor(pad(map_now), angle)
                 map_future = rotate_tensor(pad(map_future), angle)
-                # delta_map = rotate_tensor(delta_map, angle)
+                # delta_map = map_future - map_now
+            
+                # Normalize if required
+                # if self.__args.normalize:
+                #     map_now = map_now / (torch.amax(map_now, dim=(-2, -1), keepdim=True) + 1e-8)
+                #     map_future = map_future / (torch.amax(map_future, dim=(-2, -1), keepdim=True) + 1e-8)
+                    # delta_map = delta_map / (torch.amax(delta_map, dim=(-2, -1), keepdim=True) + 1e-8)
+                
+                map_now_norm_k =  torch.where(k_map!= 0,  map_now/k_map, torch.zeros_like(map_now)).repeat(3, 1, 1).type(self.__data_type)
+                map_future_norm_k =  torch.where(k_map != 0,  map_future/k_map, torch.zeros_like(map_future)).repeat(3, 1, 1).type(self.__data_type)
+                threshold = 0.01
+                cond_pop = torch.where(map_now_norm_k > threshold, torch.ones_like(map_now_norm_k)*threshold, map_now_norm_k)*(1/threshold)
+                pred = torch.where(map_future_norm_k > threshold, torch.ones_like(map_future_norm_k)*threshold, map_future_norm_k)*(1/threshold)
+
+                k_map_norm = k_map / (torch.amax(k_map, dim=(-2, -1), keepdim=True) + 1e-8)
+                costhab_map_norm = costhab_map / (torch.amax(costhab_map, dim=(-2, -1), keepdim=True) + 1e-8)
+                cond_k = k_map_norm.repeat(3, 1, 1).type(self.__data_type)
+                cond_costhab = costhab_map_norm.repeat(3, 1, 1).type(self.__data_type)
+
             # Prepare input tensors
             # cond_pop = pad(map_now).repeat(1, 3, 1, 1)
             # cond_land = torch.cat([
@@ -406,24 +425,11 @@ class MyDistributedIterableDataset(IterableDataset):
             # print('map now shape:', map_now.shape,flush=True)
             # print('k map shape:', k_map.shape, flush=True)
             # print("Avant la ligne problématique")
-            map_now_norm_k =  torch.where(k_map!= 0,  map_now/k_map, torch.zeros_like(map_now)).repeat(3, 1, 1).type(self.__data_type)
-            threshold = 0.01
-            cond_pop = torch.where(map_now_norm_k > threshold, torch.ones_like(map_now_norm_k)*threshold, map_now_norm_k)*(1/threshold)
 
-            map_future_norm_k =  torch.where(k_map != 0,  map_future/k_map, torch.zeros_like(map_future)).repeat(3, 1, 1).type(self.__data_type)
-            pred = torch.where(map_future_norm_k > threshold, torch.ones_like(map_future_norm_k)*threshold, map_future_norm_k)*(1/threshold)
+
+
             # pred = map_to_tensor(pad(delta_map)).type(self.__data_type)
             # pred = map_to_tensor(pad(map_future)).type(self.__data_type)
-            if self.precompressed_landscape:
-                cond_k_key = f"cond_k_latent_{angle}"
-                cond_costhab_key = f"cond_costhab_latent_{angle}"
-                cond_k = latent_tensors[cond_k_key]
-                cond_costhab = latent_tensors[cond_costhab_key]
-            else:
-                k_map_norm = k_map / (torch.amax(k_map, dim=(-2, -1), keepdim=True) + 1e-8)
-                costhab_map_norm = costhab_map / (torch.amax(costhab_map, dim=(-2, -1), keepdim=True) + 1e-8)
-                cond_k = k_map_norm.repeat(3, 1, 1).type(self.__data_type)
-                cond_costhab = costhab_map_norm.repeat(3, 1, 1).type(self.__data_type)
                 
             batch_condition_data_pop.append(cond_pop)
             batch_condition_data_k.append(cond_k)
@@ -433,10 +439,15 @@ class MyDistributedIterableDataset(IterableDataset):
 
             if len(batch_condition_data_pop) == self.__args.batch_size:
                 batch = {}
-                batch["condition_data_pop"] = torch.stack(batch_condition_data_pop)
+                if self.precompressed_data:
+                    batch["condition_data_pop"] = {'mu':torch.stack([d['mu'] for d in batch_condition_data_pop]), 'log_var': torch.stack([d['log_var'] for d in batch_condition_data_pop])}
+                    batch["prediction_data"] = {'mu':torch.stack([d['mu'] for d in batch_prediction_data]), 'log_var': torch.stack([d['log_var'] for d in batch_prediction_data])}
+                else:
+                    batch["condition_data_pop"] = torch.stack(batch_condition_data_pop)
+                    batch["prediction_data"] = torch.stack(batch_prediction_data)
                 batch["condition_data_k"] = torch.stack(batch_condition_data_k)
                 batch["condition_data_costhab"] = torch.stack(batch_condition_data_costhab)
-                batch["prediction_data"] = torch.stack(batch_prediction_data)
+
                 yield ( batch )
                 # yield (
                 #     torch.stack(batch_condition_data_pop),
@@ -451,10 +462,15 @@ class MyDistributedIterableDataset(IterableDataset):
         # Final partial batch
         if batch_condition_data_pop != []:
             batch = {}
-            batch["condition_data_pop"] = torch.stack(batch_condition_data_pop)
+            if self.precompressed_data:
+                batch["condition_data_pop"] = {'mu':torch.stack([d['mu'] for d in batch_condition_data_pop]), 'log_var': torch.stack([d['log_var'] for d in batch_condition_data_pop])}
+                batch["prediction_data"] = {'mu':torch.stack([d['mu'] for d in batch_prediction_data]), 'log_var': torch.stack([d['log_var'] for d in batch_prediction_data])}
+            else:
+                batch["condition_data_pop"] = torch.stack(batch_condition_data_pop)
+                batch["prediction_data"] = torch.stack(batch_prediction_data)
             batch["condition_data_k"] = torch.stack(batch_condition_data_k)
             batch["condition_data_costhab"] = torch.stack(batch_condition_data_costhab)
-            batch["prediction_data"] = torch.stack(batch_prediction_data)
+
             yield ( batch )
             # yield (
             #     torch.stack(batch_condition_data_pop),
@@ -552,7 +568,6 @@ def log_wandb_config(wandb_logger, args):
         'loss': args.criterion,
         'trainer strategy': args.trainer_strategy,
         'prediction_step': args.prediction_step,
-        'normalize': args.normalize,
         'mixed_precision': args.mixed_precision,
         'gradient_accumulation_steps': args.gradient_accumulation_steps,
         'nb_of_simulation_folders_train': args.nb_of_simulation_folders_train,

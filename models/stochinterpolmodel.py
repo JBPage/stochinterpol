@@ -365,12 +365,13 @@ class UnetModel(pl.LightningModule):
                  validation_criterion=partial(F.mse_loss,reduction='mean'), 
                  prediciton_step=1,
                  vae_pop: Optional[nn.Module] = None,
-                 vae_land: Optional[nn.Module] = None, 
+                 vae_land: Optional[nn.Module] = None,
+                 compressed_data = True, 
                  trainer=None,
                  overfit_mode=False,
+                 data_dispersion_factor = 0.1,
                  save_vae=False,
                  scheduler='plateau',
-                 clipping_factor=1, # for the clipping technique in q_sample
                  ):
         super().__init__()
 
@@ -404,17 +405,21 @@ class UnetModel(pl.LightningModule):
             self._external_models["vae_land"].eval()
             for param in self._external_models["vae_land"].parameters():
                 param.requires_grad = False
-        if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
-            self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
-            self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
-            print("0:Moved VAE models to device:", self._external_models["vae_pop"].device)
-            print("0:Moved VAE landscape model to device:", self._external_models["vae_land"].device)
-
+        self.compressed_data = compressed_data
+        if not compressed_data:
+            if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
+                self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
+                self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
+                print("0:Moved VAE models to device:", self._external_models["vae_pop"].device)
+                print("0:Moved VAE landscape model to device:", self._external_models["vae_land"].device)
+        self.pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor.to(self.device)
+        self.land_scaling_factor = self._external_models["vae_land"].config.scaling_factor.to(self.device)
         self.lr = lr
         self.scheduler = scheduler
         self.trainer = trainer
+        self.data_dispersion_factor = data_dispersion_factor
         self.prediction_step = prediciton_step
-        self.clipping_factor = clipping_factor
+
         self.train_criterion = train_criterion
         self.validation_criterion = validation_criterion
         self.validation_step_outputs = []
@@ -518,17 +523,22 @@ class UnetModel(pl.LightningModule):
         # print(torch.cuda.memory_summary(device=None, abbreviated=False))  # Affiche l'état de la mémoire
         # torch.cuda.synchronize()  # Force la synchronisation
         # condition_data_pop, condition_data_landscape, prediction_data = (x.to(self.device) for x in batch)
-        condition_data_pop = batch["condition_data_pop"].to(self.device)
         condition_data_k = batch["condition_data_k"].to(self.device)
         condition_data_costhab = batch["condition_data_costhab"].to(self.device)
-        prediction_data= batch["prediction_data"].to(self.device)
-
-        pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor
-        land_scaling_factor = self._external_models["vae_land"].config.scaling_factor
-
-        if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
-            self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
-            self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
+        if self.compressed_data:
+            for key, items in batch["condition_data_pop"].items():
+                batch["condition_data_pop"][key] = items.to(self.device)
+                batch["prediction_data"][key] = items.to(self.device)
+        else:
+            condition_data_pop = batch["condition_data_pop"].to(self.device)
+            prediction_data= batch["prediction_data"].to(self.device)
+        if not self.compressed_data: #in this case, no need to waste CUDA memory on an unused vae compressor
+            if self._external_models["vae_pop"].device != self.device or self._external_models["vae_land"].device != self.device:
+                self._external_models["vae_pop"] = self._external_models["vae_pop"].to(self.device)
+                self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
+                with torch.no_grad():
+                    condition_data_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.sample()
+                    prediction_data = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.sample()
             # print("1:Moved VAE models to device:", self._external_models["vae_pop"].device)
             # print("1:Moved VAE landscape model to device:", self._external_models["vae_land"].device)
         # Encoder par sous-batches
@@ -556,11 +566,20 @@ class UnetModel(pl.LightningModule):
         # condition_data_pop = torch.cat(x_cond_pop_chunks, dim=0)
         # prediction_data = torch.cat(prediction_data_chunks, dim=0)
         ## Encode condition and prediction data with VAEs
-        with torch.no_grad():
-            condition_data_pop = self._external_models["vae_pop"].encode(condition_data_pop.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor #sample()
-            prediction_data = self._external_models["vae_pop"].encode(prediction_data.to(self._external_models["vae_pop"].device)).latent_dist.mean * pop_scaling_factor #sample()
-        x_condland_1 = condition_data_k* land_scaling_factor #we pre-encoded and stored the landscape latents to save time
-        x_condland_2 = condition_data_costhab * land_scaling_factor #we pre-encoded and stored the landscape latents to save time
+        
+        else: # Random sampling with custom data dispersion (=0 when mean is used) using Gaussian distribution
+            cond_std = torch.exp(0.5 * batch["condition_data_pop"]['log_var']) * self.data_dispersion_factor
+            cond_eps = torch.randn_like(cond_std)  
+            condition_data_pop = batch["condition_data_pop"]['mu'] + cond_eps * cond_std
+
+            pred_std = torch.exp(0.5 * batch["prediction_data"]['log_var']) * self.data_dispersion_factor
+            pred_eps = torch.randn_like(pred_std)  
+            prediction_data = batch["prediction_data"]['mu'] + pred_eps * pred_std 
+
+        condition_data_pop = condition_data_pop * self.pop_scaling_factor
+        prediction_data = prediction_data * self.pop_scaling_factor
+        x_condland_1 = condition_data_k* self.land_scaling_factor #we pre-encoded and stored the landscape latents to save time
+        x_condland_2 = condition_data_costhab * self.land_scaling_factor #we pre-encoded and stored the landscape latents to save time
         #     # print("Encoded shapes:", x_cond_pop.shape, x_cond_k.shape, x_cond_costhab.shape, x.shape)
 
         x_pred = self.forward(condition_data_pop, x_condland_1, x_condland_2)

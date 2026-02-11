@@ -40,7 +40,6 @@ if __name__ == '__main__':
         concat_mode='concat',
         map_type='population',
         save_model=False,
-        normalize=False,
         data_shuffle=False,
         latent_diffusion=False,
         lr_start=1e-4,
@@ -51,6 +50,7 @@ if __name__ == '__main__':
         data_type='float32',
         prediction_step=1,
         overfit=False,
+        data_dispersion_factor=0.1,
         trainer_strategy='ddp',
         lr_scheduler='plateau',  # 'constant', 'cosine', 'cosine_restart', 'plateau'
         mixed_precision=False,
@@ -139,6 +139,12 @@ if __name__ == '__main__':
         default=default_config.lr_start
         )
     parser.add_argument(
+        '--data_dispersion_factor', 
+        type=float, 
+        default=default_config.data_dispersion_factor,
+        help="Factor for the dispiersion of Gaussian sampling of VAE encoding"
+        )
+    parser.add_argument(
         '--cpus', 
         type=int, 
         default=default_config.cpus
@@ -159,11 +165,6 @@ if __name__ == '__main__':
         '--batch_size', 
         type=int, 
         default=default_config.batch_size
-        )
-    parser.add_argument(
-        '--normalize',
-        action=argparse.BooleanOptionalAction,
-        default=default_config.normalize
         )
     parser.add_argument(
         '--data_shuffle',
@@ -500,6 +501,7 @@ if __name__ == '__main__':
         lr=args.lr_start,
         save_vae=args.save_model_vae,
         vae_pop=vae_pop if args.latent_diffusion else None,
+        data_dispersion_factor=args.data_dispersion_factor,
         vae_land=vae_land if args.latent_diffusion else None,
         scheduler=ast.literal_eval(args.lr_scheduler),
         )
