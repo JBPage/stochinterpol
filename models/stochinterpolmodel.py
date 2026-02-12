@@ -412,8 +412,8 @@ class UnetModel(pl.LightningModule):
                 self._external_models["vae_land"] = self._external_models["vae_land"].to(self.device)
                 print("0:Moved VAE models to device:", self._external_models["vae_pop"].device)
                 print("0:Moved VAE landscape model to device:", self._external_models["vae_land"].device)
-        self.pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor.to(self.device)
-        self.land_scaling_factor = self._external_models["vae_land"].config.scaling_factor.to(self.device)
+        self.pop_scaling_factor = self._external_models["vae_pop"].config.scaling_factor
+        self.land_scaling_factor = self._external_models["vae_land"].config.scaling_factor
         self.lr = lr
         self.scheduler = scheduler
         self.trainer = trainer
