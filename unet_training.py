@@ -49,6 +49,7 @@ if __name__ == '__main__':
         criterion='mse',
         data_type='float32',
         prediction_step=1,
+        iterable_dataset=False,
         overfit=False,
         data_dispersion_factor=0.1,
         trainer_strategy='ddp',
@@ -66,6 +67,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     # parser.add_argument('--device', type=str, default='cuda')
+    #Global script args
     parser.add_argument(
         '--project_name', 
         type=str, 
@@ -81,12 +83,17 @@ if __name__ == '__main__':
         type=str, 
         default=default_config.run_name
         )
+
+    #Dataset args
     parser.add_argument(
-        '--run_mode', 
-        type=str, 
-        default='train',
-        choices=['train', 'validate', 'test'],
-        help="Choose between train, validate or test"
+        '--nb_of_simulation_folders_train', 
+        type=int, 
+        default=default_config.nb_of_simulation_folders_train
+        )
+    parser.add_argument(
+        '--nb_of_simulation_folders_valid', 
+        type=int, 
+        default=default_config.nb_of_simulation_folders_valid
         )
     parser.add_argument(
         '--concat_mode', 
@@ -100,66 +107,11 @@ if __name__ == '__main__':
         default=default_config.map_type,
         choices=['population', 'k', 'costhab']
         )
-    parser.add_argument(
-        '--epochs',
-        type=int,
-        default=default_config.epochs 
-        )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=default_config.gradient_accumulation_steps,
-        help="Nb of steps to accumulate gradients"
-        )
-    parser.add_argument(
-        '--overfit',
-        action=argparse.BooleanOptionalAction,
-        default=default_config.overfit
-    )
-    parser.add_argument(
-        "--prediction_step",
-        type=int,
-        default=default_config.prediction_step,
-        help="Nb of years to predict ahead"
-        )
-    parser.add_argument(
-        '--save_model',
-        action=argparse.BooleanOptionalAction,
-        default=default_config.save_model,
-        help="activate saving of the model"
-        )
-    # parser.add_argument(
-    #     '--lr_min', 
-    #     type=float, 
-    #     default=default_config.lr_min
-    #     )
-    parser.add_argument(
-        '--lr_start', 
-        type=float, 
-        default=default_config.lr_start
-        )
-    parser.add_argument(
-        '--data_dispersion_factor', 
-        type=float, 
-        default=default_config.data_dispersion_factor,
-        help="Factor for the dispiersion of Gaussian sampling of VAE encoding"
-        )
+    #Dataloader args
     parser.add_argument(
         '--cpus', 
         type=int, 
         default=default_config.cpus
-        )
-
-    parser.add_argument(
-        '--num_channel',
-        type=int, 
-        default=default_config.num_channel
-        )
-    parser.add_argument(
-        '--criterion', 
-        type=str, 
-        default=default_config.criterion,
-        choices=['mse', 'l1']
         )
     parser.add_argument(
         '--batch_size', 
@@ -172,9 +124,61 @@ if __name__ == '__main__':
         default=default_config.data_shuffle
         )
     parser.add_argument(
-        '--weights_only',
+        '--data_years_leap',
+        type=int,
+        default=None,
+        )
+    parser.add_argument(
+        '--iterable_dataset',
         action=argparse.BooleanOptionalAction,
-        default=default_config.weights_only
+        default=default_config.iterable_dataset
+        )    
+    parser.add_argument(
+        '--data_type', 
+        type=str, 
+        default=default_config.data_type,
+        choices=['float32', 'float16', 'float64']
+        )
+    #Unet arguments
+    parser.add_argument(
+        '--num_channel',
+        type=int, 
+        default=default_config.num_channel
+        )
+
+    parser.add_argument(
+        '--dim_mults',
+        type=str,
+        default=default_config.dim_mults
+        )
+    #Pytorch lightning model arguments
+    parser.add_argument(
+        "--prediction_step",
+        type=int,
+        default=default_config.prediction_step,
+        help="Nb of years to predict ahead"
+        )
+    parser.add_argument(
+        '--criterion', 
+        type=str, 
+        default=default_config.criterion,
+        choices=['mse', 'l1']
+        )
+    parser.add_argument(
+        '--lr_start', 
+        type=float, 
+        default=default_config.lr_start
+        )
+    # parser.add_argument(
+    #     '--lr_min', 
+    #     type=float, 
+    #     default=default_config.lr_min
+    #     )
+    parser.add_argument(
+        '--data_dispersion_factor', 
+        type=float, 
+        default=default_config.data_dispersion_factor,
+        help="Factor for the dispiersion of Gaussian sampling of VAE encoding"
         )
     parser.add_argument(
         '--save_model_vae',
@@ -182,9 +186,39 @@ if __name__ == '__main__':
         default=default_config.save_model_vae
         )
     parser.add_argument(
+        '--weights_only',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.weights_only
+        )
+    parser.add_argument(
         '--latent_diffusion',
         action=argparse.BooleanOptionalAction,
         default=default_config.latent_diffusion
+        )
+    parser.add_argument(
+        '--lr_scheduler', 
+        type=str, 
+        default=default_config.lr_scheduler,
+        # choices=['constant', 'cosine', 'cosine_restart', 'plateau'],
+        )
+    #Trainer args
+    parser.add_argument(
+        '--run_mode', 
+        type=str, 
+        default='train',
+        choices=['train', 'validate', 'test'],
+        help="Choose between train, validate or test"
+        )
+    parser.add_argument(
+        '--epochs',
+        type=int,
+        default=default_config.epochs 
+        )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=default_config.gradient_accumulation_steps,
+        help="Nb of steps to accumulate gradients"
         )
     parser.add_argument(
         '--mixed_precision',
@@ -198,40 +232,25 @@ if __name__ == '__main__':
         help="Path to the checkpoint file"
         )
     parser.add_argument(
-        '--dim_mults',
-        type=str,
-        default=default_config.dim_mults
+        '--overfit',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.overfit
+    )
+    parser.add_argument(
+        '--save_model',
+        action=argparse.BooleanOptionalAction,
+        default=default_config.save_model,
+        help="activate saving of the model"
         )
+
     parser.add_argument(
         '--trainer_strategy',
         type=str,
         default=default_config.trainer_strategy
         )
-    parser.add_argument(
-        '--data_type', 
-        type=str, 
-        default=default_config.data_type,
-        choices=['float32', 'float16', 'float64']
-        )
-    parser.add_argument(
-        '--lr_scheduler', 
-        type=str, 
-        default=default_config.lr_scheduler,
-        # choices=['constant', 'cosine', 'cosine_restart', 'plateau'],
-        )
-    parser.add_argument(
-        '--nb_of_simulation_folders_train', 
-        type=int, 
-        default=default_config.nb_of_simulation_folders_train
-        )
-    parser.add_argument(
-        '--nb_of_simulation_folders_valid', 
-        type=int, 
-        default=default_config.nb_of_simulation_folders_valid
-        )
     args = parser.parse_args()
     before_memory = torch.cuda.memory_allocated()
-    print('weights only:', args.weights_only)
+    # print('weights only:', args.weights_only)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # Vérifie si CUDA est disponible
     if torch.cuda.is_available():
@@ -330,8 +349,11 @@ if __name__ == '__main__':
         # checkpoint = torch.load(vae_model_path, weights_only=True)
         # vae.load_state_dict(checkpoint['model_state_dict'])
 
-        
-    list_years = range(10,51, min(5,args.prediction_step+1))
+    #Define the year leap when going through the simulations
+    #If not manually defined, we take the max dataset where a (rep,year) does not appear twice in the dataset (even inside a year leap) with a cap of 5 years
+    year_leap_ = args.data_years_leap if args.data_years_leap is not None else min(5,args.prediction_step+1)
+
+    list_years = range(10,51, year_leap_)
     # list_years = [30]
     if args.run_mode == 'test':
         list_years = [20,30,40]
@@ -341,9 +363,10 @@ if __name__ == '__main__':
     data_module = MyDataModule(
         args=args,
         train_folders=train_dataset_folder,
+        iterable_dataset=args.iterable_dataset,
         validation_folders=validation_data_folder,
         years=range(10,51),
-        year_leap=min(5,args.prediction_step+1),
+        year_leap=year_leap_,
         data_type=data_type
         )
     
@@ -369,6 +392,11 @@ if __name__ == '__main__':
     print(f"Nb batches per GPU train: {nb_batches_per_gpu_train}")
     print(f"Nb batches per GPU validation: {nb_batches_per_gpu_validation}")
     print(f"Nb batches per GPU test: {nb_batches_per_gpu_test}")
+
+    if not args.iterable_dataset: #if normal dataset, no need to cap the nb of train/val/test batches, necessary in case of iterable dataset to not loop eternally
+        nb_batches_per_gpu_train=None
+        nb_batches_per_gpu_validation=None
+        nb_batches_per_gpu_test=None
 
     unet = Unet(
             dim=input_dim, #for conditioning 
@@ -457,13 +485,16 @@ if __name__ == '__main__':
         # wandb.watch_called = False  
         # wandb.watch(unet, log="all", log_freq=100)  
     profiler = PyTorchProfiler(
-            dirpath=".", 
-            filename="pytorch_profiler", 
-            export_to_chrome=True,
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler('./tb_log'),
-            record_shapes=True,
-            profile_memory=True,
+        dirpath=".",
+        filename="pytorch_profiler",
+        export_to_chrome=True,
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('./tb_log'),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+        with_flops=True,
+        with_modules=True,
         )
     
     trainer = Trainer(
@@ -471,10 +502,10 @@ if __name__ == '__main__':
         # limit_train_batches=1,         # profile only a few batches first
         # limit_val_batches=1,
         # enable_checkpointing=False,    # to reduce noise during profiling
-        # profiler=profiler,
+        # profiler="simple", #profiler,
         # For training:
-        limit_train_batches=1 if args.overfit else nb_batches_per_gpu_train,
-        limit_val_batches=0 if args.overfit else nb_batches_per_gpu_validation,
+        limit_train_batches=10 if args.overfit else nb_batches_per_gpu_train,
+        limit_val_batches=1 if args.overfit else nb_batches_per_gpu_validation,
         limit_test_batches=nb_batches_per_gpu_test,
         logger=wandb_logger,
         callbacks=[
