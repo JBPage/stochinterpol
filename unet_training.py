@@ -530,7 +530,6 @@ if __name__ == '__main__':
         # train_criterion=partial(F.mse_loss,reduction='mean'),
         trainer=trainer,
         lr=args.lr_start,
-        save_vae=args.save_model_vae,
         vae_pop=vae_pop if args.latent_diffusion else None,
         data_dispersion_factor=args.data_dispersion_factor,
         vae_land=vae_land if args.latent_diffusion else None,
